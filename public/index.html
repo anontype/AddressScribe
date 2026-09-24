@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="description" content="AddressScribe — read-only поиск публичной активности адресов в EVM и Solana с браузерной PWA-панелью.">
+  <meta name="theme-color" content="#050806">
+  <meta name="color-scheme" content="dark">
+  <title>AddressScribe</title>
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/icon-192.png">
+  <link rel="stylesheet" href="/styles.css">
+  <script type="module" src="/app.js"></script>
+</head>
+<body>
+  <a class="skip" href="#scanner">К поиску</a>
+  <header class="topbar shell">
+    <a class="brand" href="/" aria-label="AddressScribe, главная">
+      <span class="brand-mark" aria-hidden="true"><span>&gt;_</span></span>
+      <span><strong>AddressScribe</strong><small>public chain finder</small></span>
+    </a>
+    <div class="top-actions">
+      <span class="connection" id="connection" role="status" aria-live="polite"><i></i><span>Подключение</span></span>
+      <button class="button ghost compact" id="install" type="button" hidden>Установить</button>
+    </div>
+  </header>
+
+  <main class="shell stack">
+    <section class="hero">
+      <div>
+        <p class="kicker"><span>READ ONLY</span><span>LOCAL FIRST</span><span>37 CHAINS</span></p>
+        <h1>Публичная активность.<br><em>Без личных данных.</em></h1>
+        <p class="lead">Находит адреса по транзакциям, показывает публичные балансы уже найденных адресов и объединяет EVM-активность между сетями. Никаких кошельков, ключей, подписей или телеметрии.</p>
+      </div>
+      <div class="privacy-card" aria-label="Приватность">
+        <span>PRIVACY BOUNDARY</span>
+        <p><b>0</b> cookies</p>
+        <p><b>0</b> user-data persistence</p>
+        <p><b>0</b> telemetry</p>
+        <p><b>0</b> signing methods</p>
+      </div>
+    </section>
+
+    <section class="workspace" id="scanner" aria-label="Панель поиска">
+      <form class="panel controls" id="scan-form" novalidate>
+        <div class="panel-title">
+          <div><span class="section-number">01 / SCOPE</span><h2>Параметры поиска</h2></div>
+          <span class="read-only-badge">READ ONLY</span>
+        </div>
+
+        <fieldset class="mode-field">
+          <legend>Режим</legend>
+          <div class="modes" id="modes">
+            <label><input type="radio" name="mode" value="activity" checked><span><b>Транзакции</b><small>активность и частота</small></span></label>
+            <label><input type="radio" name="mode" value="balances"><span><b>Балансы</b><small>ранг найденных адресов</small></span></label>
+            <label><input type="radio" name="mode" value="multichain"><span><b>Все сети</b><small>общий EVM-профиль</small></span></label>
+          </div>
+        </fieldset>
+
+        <fieldset class="chain-field" id="chain-fieldset" disabled>
+          <legend>Сети</legend>
+          <div class="field-head">
+            <p id="chain-count" role="status" aria-live="polite">Загрузка реестра…</p>
+            <div class="chain-actions">
+              <button class="text-button" id="select-all" type="button">Выбрать все</button>
+              <button class="text-button" id="clear-all" type="button">Очистить</button>
+            </div>
+          </div>
+          <label class="chain-search"><span aria-hidden="true">⌕</span><input id="chain-search" type="search" aria-label="Фильтр сетей" placeholder="Фильтр: base, solana, arbitrum…" autocomplete="off"></label>
+          <div class="chain-grid" id="chain-grid" aria-live="polite"><p class="inline-state">Подключение к локальному API…</p></div>
+          <p class="field-error" id="chain-error" role="alert" hidden></p>
+        </fieldset>
+
+        <div class="tuning">
+          <label class="range-control">
+            <span><b>Глубина</b><output id="depth-output">2</output></span>
+            <input id="depth" name="depth" type="range" min="1" max="50" value="2">
+            <small><span>1</span><span>50 блоков / слотов</span></small>
+          </label>
+          <label class="select-control">
+            <span>Потоки</span>
+            <select id="concurrency"><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4" selected>4</option><option value="5">5</option><option value="6">6</option><option value="7">7</option><option value="8">8</option></select>
+          </label>
+          <label class="select-control">
+            <span>Лимит</span>
+            <select id="limit"><option value="25">25</option><option value="50" selected>50</option><option value="75">75</option><option value="100">100</option></select>
+          </label>
+        </div>
+
+        <details class="remote-access">
+          <summary>Удалённый доступ</summary>
+          <div class="token-row">
+            <label>Токен API<input id="access-token" type="password" autocomplete="off" placeholder="Только если сервер запущен на LAN"></label>
+            <button class="button ghost" id="apply-token" type="button">Применить</button>
+          </div>
+          <p>Токен хранится только в памяти вкладки и отправляется заголовком <code>X-AddressScribe-Token</code>. Для установки PWA на телефоне используйте HTTPS.</p>
+        </details>
+
+        <div class="submit-row">
+          <p>Публичные RPC имеют лимиты. «Все сети» запускается с малой глубиной и может вернуть частичное покрытие.</p>
+          <button class="button primary" id="scan-button" type="submit" disabled><span>Запустить finder</span><span aria-hidden="true">→</span></button>
+        </div>
+      </form>
+
+      <aside class="panel live-panel" aria-labelledby="live-title">
+        <div class="panel-title">
+          <div><span class="section-number">02 / LIVE</span><h2 id="live-title">Поток кошельков</h2></div>
+          <span class="cursor" id="cursor" aria-hidden="true"></span>
+        </div>
+        <div class="run-summary" role="status" aria-live="polite">
+          <div><span>Сеть</span><strong id="summary-chain">—</strong></div>
+          <div><span>Найдено</span><strong id="summary-wallets">0</strong></div>
+          <div><span>Покрытие</span><strong id="summary-coverage">—</strong></div>
+        </div>
+        <div class="terminal" id="terminal" aria-live="off" aria-busy="false">
+          <div class="terminal-bar"><span></span><span></span><span></span><b>finder://live</b></div>
+          <div class="terminal-log" id="terminal-log">
+            <p><span>status:</span> waiting_for_scope</p>
+            <p><span>privacy:</span> local_session_only</p>
+            <p><span>mode:</span> activity</p>
+          </div>
+        </div>
+        <div class="wallet-stream" id="wallet-stream" aria-label="Найденные публичные адреса"></div>
+        <button class="button cancel" id="cancel" type="button" hidden>Остановить</button>
+      </aside>
+    </section>
+
+    <section class="results" aria-labelledby="results-title">
+      <div class="results-head"><div><span class="section-number">03 / RESULTS</span><h2 id="results-title">Найденные адреса</h2></div><span id="run-state">IDLE</span></div>
+      <div class="notice error" id="error" role="alert" hidden><b>Поиск остановлен</b><p id="error-text"></p></div>
+      <div class="notice warning" id="partial" role="status" hidden><b>Частичное покрытие</b><p>Некоторые сети или методы не ответили. Пустые места не трактуются как отсутствие кошельков.</p></div>
+      <div class="result-table-wrap" id="table-wrap" hidden>
+        <table>
+          <thead><tr><th scope="col">Адрес</th><th scope="col">Сеть</th><th scope="col">Score</th><th scope="col">Транзакции</th><th scope="col">Баланс</th><th scope="col">Тип</th></tr></thead>
+          <tbody id="result-body"></tbody>
+        </table>
+      </div>
+      <div class="empty" id="empty"><div class="empty-terminal"><p>finder --mode activity</p><p>scope: bounded_public_blocks</p><p>status: ready</p></div><div><h3>Пока нет результатов</h3><p>Выберите сеть и запустите поиск. Новые адреса будут поступать в live-панель по мере готовности цепочки.</p></div></div>
+    </section>
+
+    <section class="install panel">
+      <div class="install-mark" aria-hidden="true">+</div>
+      <div><span class="section-number">PWA</span><h2>Один интерфейс на телефоне, планшете и компьютере</h2><p>Устанавливается как приложение, адаптируется под safe-area и работает офлайн только как статическая оболочка. Данные поиска никогда не кэшируются.</p></div>
+      <p id="install-note">Используйте «Установить» в браузере или Add to Home Screen.</p>
+    </section>
+  </main>
+
+  <footer class="shell footer"><p>AddressScribe / public activity, private session</p><p>No keys · No signing · No telemetry</p></footer>
+  <noscript><p class="shell noscript">Для поиска нужен JavaScript. Статическая оболочка не выполняет фоновые запросы.</p></noscript>
+</body>
+</html>

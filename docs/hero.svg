@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" role="img" aria-labelledby="title description">
+  <title id="title">AddressScribe</title>
+  <desc id="description">Terminal green интерфейс мультисетевого поиска публичной активности</desc>
+  <defs>
+    <linearGradient id="bg" x1="80" y1="40" x2="1120" y2="590" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#08110b"/>
+      <stop offset="1" stop-color="#030605"/>
+    </linearGradient>
+    <linearGradient id="screen" x1="180" y1="120" x2="1010" y2="520" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0b1810"/>
+      <stop offset="1" stop-color="#07100a"/>
+    </linearGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="7" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <pattern id="grid" width="36" height="36" patternUnits="userSpaceOnUse">
+      <path d="M36 0H0V36" fill="none" stroke="#65f6a7" stroke-opacity=".045"/>
+    </pattern>
+  </defs>
+  <rect width="1200" height="630" fill="url(#bg)"/>
+  <rect width="1200" height="630" fill="url(#grid)"/>
+  <circle cx="180" cy="110" r="250" fill="#22d978" opacity=".045"/>
+  <circle cx="1030" cy="500" r="310" fill="#65f6a7" opacity=".03"/>
+  <text x="72" y="78" fill="#65f6a7" font-family="ui-monospace,Menlo,monospace" font-size="18" letter-spacing="4">ADDRESSSCRIBE / PUBLIC CHAIN FINDER</text>
+  <text x="72" y="132" fill="#e7f4ea" font-family="ui-monospace,Menlo,monospace" font-size="42" font-weight="700">activity, not identity.</text>
+  <text x="72" y="176" fill="#607769" font-family="ui-monospace,Menlo,monospace" font-size="17">EVM + SOLANA · READ ONLY · LOCAL FIRST</text>
+  <g transform="translate(72 220)">
+    <rect width="1056" height="330" rx="12" fill="#020503" stroke="#31513d" stroke-width="2"/>
+    <rect x="1" y="1" width="1054" height="42" rx="11" fill="#0a140e"/>
+    <path d="M1 43H1055" stroke="#1c3024"/>
+    <circle cx="28" cy="22" r="6" fill="#22d978" filter="url(#glow)"/>
+    <circle cx="50" cy="22" r="6" fill="#31513d"/>
+    <circle cx="72" cy="22" r="6" fill="#31513d"/>
+    <text x="104" y="28" fill="#607769" font-family="ui-monospace,Menlo,monospace" font-size="13">finder://live</text>
+    <text x="28" y="83" fill="#607769" font-family="ui-monospace,Menlo,monospace" font-size="15"><tspan fill="#70d8e8">mode:</tspan> multichain</text>
+    <text x="28" y="112" fill="#607769" font-family="ui-monospace,Menlo,monospace" font-size="15"><tspan fill="#70d8e8">scope:</tspan> 37 chains / bounded</text>
+    <text x="28" y="141" fill="#607769" font-family="ui-monospace,Menlo,monospace" font-size="15"><tspan fill="#70d8e8">privacy:</tspan> local_session_only</text>
+    <path d="M28 172H1028" stroke="#1c3024"/>
+    <text x="28" y="208" fill="#22d978" font-family="ui-monospace,Menlo,monospace" font-size="14">+ 0x71bc…e8a2  ethereum  tx=14  score=71  gas=12 gwei</text>
+    <text x="28" y="236" fill="#65f6a7" font-family="ui-monospace,Menlo,monospace" font-size="14">+ 0x8fd2…119a  base      tx=9   score=63  balance=4.82 ETH</text>
+    <text x="28" y="264" fill="#65f6a7" font-family="ui-monospace,Menlo,monospace" font-size="14">+ 0x290a…d2f0  arbitrum  tx=7   score=58  cross-chain=3</text>
+    <text x="28" y="292" fill="#22d978" font-family="ui-monospace,Menlo,monospace" font-size="14">+ A7Kp…91mQ   solana    tx=5   score=49  balance=18.2 SOL</text>
+  </g>
+  <g transform="translate(865 96)">
+    <rect width="230" height="92" fill="#08110b" stroke="#31513d"/>
+    <text x="20" y="28" fill="#607769" font-family="ui-monospace,Menlo,monospace" font-size="12">PRIVACY BOUNDARY</text>
+    <text x="20" y="56" fill="#65f6a7" font-family="ui-monospace,Menlo,monospace" font-size="18">0 keys · 0 cookies</text>
+    <text x="20" y="78" fill="#65f6a7" font-family="ui-monospace,Menlo,monospace" font-size="18">0 storage · 0 telemetry</text>
+  </g>
+</svg>

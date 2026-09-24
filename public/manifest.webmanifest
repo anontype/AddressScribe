@@ -1,0 +1,30 @@
+{
+  "id": "/",
+  "name": "AddressScribe",
+  "short_name": "AddressScribe",
+  "description": "Read-only поиск публичной активности адресов в EVM и Solana.",
+  "lang": "ru",
+  "dir": "ltr",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["window-controls-overlay", "standalone", "browser"],
+  "orientation": "any",
+  "background_color": "#050806",
+  "theme_color": "#050806",
+  "categories": ["utilities", "developer"],
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

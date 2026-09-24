@@ -1,16 +1,59 @@
 {
-  "name": "Wallets_Finder",
-  "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+  "name": "addressscribe",
+  "version": "0.1.0",
+  "license": "MIT",
+  "description": "Read-only multichain public wallet activity finder for EVM and Solana.",
+  "author": "anontype",
+  "keywords": [
+    "blockchain",
+    "ethereum",
+    "evm",
+    "solana",
+    "wallet",
+    "analytics",
+    "pwa"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/anontype/AddressScribe.git"
+  },
+  "homepage": "https://github.com/anontype/AddressScribe#readme",
+  "bugs": {
+    "url": "https://github.com/anontype/AddressScribe/issues"
   },
   "type": "module",
   "private": true,
-  "dependencies": {
-    "ethers": "^6.13.5",
-    "fs": "^0.0.1-security",
-    "url": "^0.11.4"
+  "bin": {
+    "addressscribe": "src/cli.js"
+  },
+  "files": [
+    "src",
+    "public",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "chains": "node src/cli.js chains",
+    "scan": "node src/cli.js scan",
+    "test": "node --test",
+    "test:watch": "node --test --watch",
+    "lint": "eslint .",
+    "typecheck": "tsc -p jsconfig.json",
+    "check:syntax": "node scripts/syntax-check.mjs",
+    "check:index": "node scripts/index-check.mjs",
+    "privacy:check": "node scripts/privacy-check.mjs",
+    "check:offline": "npm test && npm run check:syntax && npm run check:index && npm run privacy:check",
+    "check": "npm run lint && npm run typecheck && npm run check:offline"
+  },
+  "engines": {
+    "node": ">=20.19.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@types/node": "20.19.43",
+    "eslint": "10.11.0",
+    "typescript": "7.0.2"
   }
 }
