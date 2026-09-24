@@ -51,6 +51,7 @@ test("server exposes a locked-down static shell and health endpoint", async () =
     const health = await fetch(`${app.base}/api/health`).then((response) => response.json());
     assert.equal(health.name, "AddressScribe");
     assert.equal(health.privacy.privateKeyAccess, false);
+    assert.equal(health.features.zeroExQuote, false);
     const icon = await fetch(`${app.base}/icon-192.png`);
     assert.equal(icon.status, 200);
     assert.equal(icon.headers.get("content-type"), "image/png");
@@ -93,6 +94,63 @@ test("server validates scan limits before scanning", async () => {
     assert.equal(response.status, 400);
     assert.equal((await response.json()).error.code, "invalid_blocks");
     assert.equal(calls, 0);
+  } finally {
+    await app.close();
+  }
+});
+
+test("server validates optional enrichment flags before scanning", async () => {
+  let calls = 0;
+  const app = await start({ scanChains: async () => { calls += 1; return { wallets: [], results: [] }; } });
+  try {
+    const invalidEnrichment = await fetch(`${app.base}/api/scan`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...body, enrich: { tokens: [{ chain: "ethereum", address: "bad" }] } })
+    });
+    assert.equal(invalidEnrichment.status, 400);
+    assert.equal((await invalidEnrichment.json()).error.code, "invalid_enrichment");
+    const invalidReceipts = await fetch(`${app.base}/api/scan`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...body, includeReceipts: "yes" })
+    });
+    assert.equal(invalidReceipts.status, 400);
+    assert.equal((await invalidReceipts.json()).error.code, "invalid_receipts");
+    assert.equal(calls, 0);
+  } finally {
+    await app.close();
+  }
+});
+
+test("server exposes optional read-only 0x price data without exposing the API key", async () => {
+  let upstreamRequest;
+  const app = await start({
+    zeroExApiKey: "test-0x-api-key-123456",
+    fetchImpl: async (url, options) => {
+      upstreamRequest = { url, options };
+      return { ok: true, text: async () => JSON.stringify({ price: "123.45", totalNetworkFee: "7", secret: "must-not-leak" }) };
+    }
+  });
+  try {
+    const response = await fetch(`${app.base}/api/quote?chainId=1&sellToken=0x1111111111111111111111111111111111111111&buyToken=0x2222222222222222222222222222222222222222&sellAmount=1000`);
+    assert.equal(response.status, 200);
+    const payload = await response.json();
+    assert.equal(payload.quote.price, "123.45");
+    assert.equal(JSON.stringify(payload).includes("must-not-leak"), false);
+    assert.equal(upstreamRequest.options.headers["0x-api-key"], "test-0x-api-key-123456");
+    assert.equal(upstreamRequest.options.headers["0x-version"], "v2");
+  } finally {
+    await app.close();
+  }
+});
+
+test("0x quote endpoint is disabled without a server-side key", async () => {
+  const app = await start();
+  try {
+    const response = await fetch(`${app.base}/api/quote?chainId=1&sellToken=0x1111111111111111111111111111111111111111&buyToken=0x2222222222222222222222222222222222222222&sellAmount=1000`);
+    assert.equal(response.status, 503);
+    assert.equal((await response.json()).error.code, "quote_unavailable");
   } finally {
     await app.close();
   }

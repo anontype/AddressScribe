@@ -12,7 +12,8 @@ const nodeGlobals = {
   setInterval: "readonly",
   setTimeout: "readonly",
   TextDecoder: "readonly",
-  TextEncoder: "readonly"
+  TextEncoder: "readonly",
+  URLSearchParams: "readonly"
 };
 
 const browserGlobals = {
@@ -26,6 +27,7 @@ const browserGlobals = {
   clearTimeout: "readonly",
   URL: "readonly",
   TextDecoder: "readonly",
+  URLSearchParams: "readonly",
   window: "readonly"
 };
 

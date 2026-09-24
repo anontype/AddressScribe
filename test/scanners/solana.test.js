@@ -63,7 +63,16 @@ test("Solana scanner records signer, fee payer, success, and failure", async () 
 });
 
 test("Solana classification is bounded to groups of 100", async () => {
-  const signers = Array.from({ length: 101 }, (_, index) => `D${String(index).padStart(40, "0")}`);
+  const alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+  const signers = Array.from({ length: 101 }, (_, index) => {
+    let value = index + 1;
+    let suffix = "";
+    while (value > 0) {
+      suffix = alphabet[value % alphabet.length] + suffix;
+      value = Math.floor(value / alphabet.length);
+    }
+    return `D${suffix.padStart(39, "1")}`;
+  });
   const blockTransactions = signers.map((address) => ({
     transaction: { message: { accountKeys: [{ pubkey: address, signer: true, writable: true }] }, signatures: [] },
     meta: { err: null, fee: 1 }
@@ -150,6 +159,23 @@ test("Solana scanner filters vote transactions and reports skipped slots", async
   assert.equal(result.coverage.voteTransactionsSkipped, "1");
   assert.equal(result.candidates.some((candidate) => candidate.address === payer), true);
   assert.equal(result.stats.transactions, "1");
+});
+
+test("Solana scanner records slot lineage and marks a parent mismatch", async () => {
+  const client = {
+    call: async (method, params) => {
+      if (method === "getBlock") {
+        if (params[0] === 20) return { slot: 20, blockhash: "A11111111111111111111111111111111111", previousBlockhash: "B11111111111111111111111111111111111", blockTime: 1, transactions: [] };
+        return { slot: 21, blockhash: "C11111111111111111111111111111111111", previousBlockhash: "D11111111111111111111111111111111111", blockTime: 2, transactions: [] };
+      }
+      throw new Error("unexpected method");
+    }
+  };
+  const result = await scanSolana({ chain, client, fromSlot: 20, toSlot: 21 });
+  assert.equal(result.coverage.reorgDetected, true);
+  assert.equal(result.coverage.reasons.includes("reorg-detected"), true);
+  assert.equal(result.blockEvidence[0].previousBlockhash, "B11111111111111111111111111111111111");
+  assert.equal(result.range.head.blockhash, "C11111111111111111111111111111111111");
 });
 
 test("Solana scanner enforces slot and transaction caps", async () => {

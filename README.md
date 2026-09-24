@@ -1,30 +1,37 @@
 <p align="center">
-  <img src="docs/hero.svg" alt="AddressScribe — терминальный интерфейс поиска публичной активности" width="100%">
+  <img src="docs/hero.svg" alt="AddressScribe — a simple public blockchain activity finder" width="100%">
 </p>
 
 <h1 align="center">AddressScribe</h1>
 
-<p align="center">Read-only мультисетевой finder публичной активности EVM- и SVM-адресов.<br>Terminal UI · PWA · CLI · zero runtime dependencies.</p>
+<p align="center">A small, read-only tool for looking at public blockchain activity.</p>
 
-AddressScribe находит публичные адреса в ограниченном окне блоков или слотов, ранжирует их по прозрачной активности, показывает публичный native-баланс уже найденных адресов и объединяет один EVM-адрес между сетями. Это не keyfinder: кошельки не генерируются, приватные ключи не создаются и не запрашиваются, транзакции не подписываются.
+I made AddressScribe because I wanted a simple way to look through recent public blockchain activity without asking anyone for a private key.
 
-## Что умеет
+It looks at a small number of recent blocks or Solana slots and shows addresses that were active there. It supports Ethereum-compatible networks and Solana.
 
-- **Транзакции** — собирает EVM-блоки и Solana slots, классифицирует EOA/contract/program, считает активность и строит explainable score.
-- **Балансы** — сортирует только адреса, уже найденные в выбранном диапазоне, по публичному native-балансу.
-- **Все сети** — объединяет активность одного EVM-адреса между mainnet/L2 сетями; разные валюты не складываются в выдуманный USD-баланс.
-- **37 сетей** — 36 EVM-сетей из registry `0xNFT` и актуальных 0x additions, плюс Solana как первый SVM adapter.
-- **0x metadata** — 22 EVM-сети из актуального списка 0x Swap/Gasless API и Solana помечаются как metadata-only. Этот проект не исполняет swaps.
-- **Live browser panel** — NDJSON-поток показывает результаты по мере готовности каждой сети.
-- **PWA** — один responsive-интерфейс для телефона, планшета и desktop; статическая оболочка доступна offline.
-- **CLI** — те же режимы с JSON, JSONL, CSV или безопасным stdout.
-- **Public RPC etiquette** — batch до 20 calls, per-endpoint rate limit, bounded concurrency, Retry-After и честный partial coverage.
+This is **not** a wallet generator. It does not create wallets, sign transactions, send money, or ask for seed phrases.
 
-> «Все сети» означает поддерживаемый registry и параллельную обработку, а не бесплатную глобальную историю всех блокчейнов. Полный historical scan требует hosted RPC/indexer и не входит в обещания pet project.
+## What it does
 
-## Быстрый старт
+- Finds recently active addresses.
+- Shows a simple activity score.
+- Checks the main coin balance of addresses it finds.
+- Can look at the same Ethereum-style address on several networks.
+- Shows results in a browser or in the terminal.
+- Shows progress while a scan is running.
+- Optionally checks balances for tokens or NFT collections that I explicitly provide.
+- Optionally reads EVM receipts and internal calls when the RPC supports them.
+- Checks block or slot links and can save a small range checkpoint.
+- Saves results as JSON, JSONL, or CSV.
 
-Требуется Node.js `20.19+`.
+The list currently contains **37 networks**: 36 Ethereum-compatible networks and Solana.
+
+I also added metadata for the networks supported by 0x. This is only information about networks. AddressScribe does not make swaps or transactions.
+
+## Try it locally
+
+You need Node.js `20.19` or newer.
 
 ```bash
 git clone https://github.com/anontype/AddressScribe.git
@@ -33,101 +40,182 @@ npm install
 npm start
 ```
 
-Откройте `http://127.0.0.1:4173`.
+Then open [http://127.0.0.1:4173](http://127.0.0.1:4173).
 
-Для разработки:
+If I am changing the code and want the server to restart automatically, I use:
 
 ```bash
 npm run dev
 ```
 
-## CLI
+## Using the web app
+
+1. Choose one or more networks.
+2. Choose how many recent blocks or slots to check. I would start with `1` or `2`.
+3. Choose a mode.
+4. Press **Run finder**.
+5. Wait for the results to appear.
+
+The app can be installed as a PWA if the browser supports it. The basic app page can load without internet, but a search still needs the AddressScribe server.
+
+In **Additional checks**, I can enter public token contracts or Solana mints. I can also ask the server for EVM receipts or internal calls. These extra requests are optional because many public RPC services do not provide them.
+
+## The three modes
+
+### Transactions
+
+This is the normal mode. It finds addresses that sent or received something in the selected recent range.
+
+### Balances
+
+This mode first finds active addresses. It then checks the main coin balance of those addresses and sorts the list by that balance.
+
+It does not search every wallet on the internet and return all rich wallets.
+
+### All networks
+
+This mode combines activity for the same Ethereum-style address across the selected networks.
+
+I keep balances separate because the same coin can have a different value or risk on different networks. The app does not invent one total dollar amount.
+
+## Command line examples
+
+List the networks:
 
 ```bash
 node src/cli.js chains
+```
+
+Look at recent Ethereum activity:
+
+```bash
 node src/cli.js scan --chain ethereum --blocks 5
-node src/cli.js scan --chain base,arbitrum,solana --mode multichain
-node src/cli.js scan --chain all --mode balances --blocks 2 --limit 100
+```
+
+Look at several networks:
+
+```bash
+node src/cli.js scan --chain base,arbitrum,solana --blocks 2
+```
+
+Combine Ethereum-style addresses from several networks:
+
+```bash
+node src/cli.js scan --chain base,arbitrum --mode multichain
+```
+
+Save results as JSONL:
+
+```bash
 node src/cli.js scan --chain ethereum --format jsonl --output out/activity.jsonl
+```
+
+Check a public ERC-20 balance for the first 20 found addresses:
+
+```bash
+node src/cli.js scan --chain ethereum --blocks 2 --token ethereum:0x6B175474E89094C44Da98b954EedeAC495271d0F:erc20:18
+```
+
+Ask for EVM receipts and internal calls:
+
+```bash
+node src/cli.js scan --chain ethereum --blocks 2 --receipts --traces
+```
+
+Save safe range metadata for a later run:
+
+```bash
+node src/cli.js scan --chain ethereum --blocks 2 --state-file out/scan.checkpoint.json
+```
+
+Start the server manually:
+
+```bash
 node src/cli.js serve --host 127.0.0.1 --port 4173
 ```
 
-Режимы:
+## If I need a more reliable RPC
 
-| Режим | Что означает |
-|---|---|
-| `activity` | Ранг по публичной транзакционной активности |
-| `balances` | Native-баланс уже найденных адресов, без глобального поиска «богатых кошельков» |
-| `multichain` | Один EVM-профиль по выбранным сетям |
+An RPC is simply a service that returns blockchain data. The project has public endpoints, but they can be busy or limited.
 
-## RPC
-
-В репозитории лежат только публичные RPC без встроенных ключей. Для стабильной работы задайте собственные endpoint через окружение:
+I can provide my own endpoint through environment variables:
 
 ```bash
-export BASE_RPC_URL="https://your-hosted-base-rpc.example"
-export SOLANA_RPC_URL="https://your-hosted-solana-rpc.example"
-export ADDRESSSCRIBE_RPC_URLS='{"ethereum":["https://your-hosted-eth-rpc.example"]}'
+export BASE_RPC_URL="https://my-base-rpc.example"
+export SOLANA_RPC_URL="https://my-solana-rpc.example"
+export ADDRESSSCRIBE_RPC_URLS='{"ethereum":["https://my-ethereum-rpc.example"]}'
 ```
 
-Приложение намеренно не загружает `.env` автоматически и не пишет секреты в `.env`. Файл `.env.example` содержит только имена переменных и пустые placeholders. Bounded response cap по умолчанию — 16 MiB; его можно уменьшить или поднять до 32 MiB через `ADDRESSSCRIBE_RPC_MAX_RESPONSE_BYTES`.
+The app does not load `.env` files automatically. The [`.env.example`](.env.example) file only shows the available settings and does not contain real keys.
 
-Привязка к LAN через HTTPS reverse proxy:
+The default response limit is 16 MiB. I can change it up to 32 MiB with `ADDRESSSCRIBE_RPC_MAX_RESPONSE_BYTES`.
+
+## Optional 0x price preview
+
+I can also expose a read-only 0x price preview when I set `ZEROEX_API_KEY` on the server:
 
 ```bash
-export ADDRESSSCRIBE_TOKEN="$(openssl rand -hex 32)"
-node src/cli.js serve --host 127.0.0.1 --port 4173
+export ZEROEX_API_KEY="my-server-side-key"
+node src/cli.js serve
 ```
 
-Для установки PWA на телефон или другую сеть приложение публикуйте через HTTPS reverse proxy. Прямой plain-HTTP bind на `0.0.0.0` по умолчанию отклоняется; для доверенной локальной сети его можно включить только явно через `ADDRESSSCRIBE_ALLOW_INSECURE_LAN=1` или `--allow-insecure-lan`. Токен хранится только в памяти вкладки и передаётся заголовком `X-AddressScribe-Token`.
+The browser can call `GET /api/quote` with `chainId`, `sellToken`, `buyToken`, and `sellAmount`. The server adds the API key and returns only price data. It does not ask for a taker, create a transaction, sign anything, or execute a swap. Without the key, the endpoint returns `quote_unavailable` instead of pretending to have a quote.
 
-## Privacy boundary
+## Privacy
 
-- Нет `privateKey`, `mnemonic`, `seed phrase` и key generation API.
-- Нет signing, `sendRawTransaction` или allowance changes.
-- Нет cookies, `localStorage`, `sessionStorage`, analytics и telemetry.
-- API отдаёт allowlisted fields; raw RPC payloads не попадают в UI.
-- URL credentials/query keys редактируются в ошибках и никогда не логируются.
-- Service worker кэширует только статическую оболочку и никогда `/api/*`.
-- Checkpoint-файл, если он используется, содержит только cursor/hash/coverage и записывается с mode `0600`.
-- `npm run privacy:check` и CI запрещают signing/key-generation imports, browser persistence и внешние executable assets.
+I built this as a read-only project:
 
-Подробности: [`docs/PRIVACY.md`](docs/PRIVACY.md).
+- It never asks for a private key.
+- It has no wallet generator.
+- It cannot sign or send transactions.
+- It does not use cookies, analytics, or tracking.
+- Search results are kept in the current page memory and are not saved in browser storage.
+- Raw RPC responses are not sent to the browser.
+- Secrets in RPC URLs are hidden from error messages.
+- The service worker caches only the static app page, not search results.
+- A checkpoint file, when I use `--state-file`, contains only range cursors, hashes, and coverage. It does not contain wallet addresses. On the next CLI run, AddressScribe compares an overlapping block or slot and reports `reorg-detected` if its hash changed.
 
-## Архитектура
+If I run the server for another device, the access token stays in the current tab memory. It is sent in the `X-AddressScribe-Token` header.
 
-```text
-Browser PWA / CLI
-       │
-       ├── POST /api/scan
-       └── POST /api/scan/stream  ── NDJSON progress
-       │
-       ▼
-scanChains orchestrator
-       │
-       ├── EVM adapter ── eth_getBlockByNumber / eth_getCode / eth_getBalance
-       └── Solana adapter ─ getSlot / getBlock / getMultipleAccounts / getBalance
-       │
-       ├── JSON-RPC batch client
-       ├── rate limiter + retry policy
-       ├── deterministic activity ranker
-       └── coverage + safe exporters
-```
+Plain HTTP access to other devices is disabled by default. For use on a phone or another computer, I use an HTTPS proxy. For a trusted local test network only, plain LAN access can be enabled with `--allow-insecure-lan`.
 
-Подробности: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+The full privacy notes are in [`docs/PRIVACY.md`](docs/PRIVACY.md).
 
-## Сеть и совместимость
+## What the results do not prove
 
-- Node.js: `>=20.19.0`
-- Runtime dependencies: `0`
-- Browser: современные Chromium, Firefox и Safari с PWA/service-worker support
-- Transport: HTTP JSON-RPC 2.0, batch до 20 calls
-- EVM: full blocks + `eth_getCode` classification
-- Solana: `jsonParsed` slots + `getMultipleAccounts` classification
+The app shows public blockchain observations. It cannot prove who controls an address.
 
-Полная таблица registry: [`docs/CHAINS.md`](docs/CHAINS.md).
+- An address can belong to a person, a contract, an exchange, a bridge, or an automated service.
+- A Solana signer is an account that signed a transaction. It does not prove that a particular person owns the account.
+- A score is only a ranking based on visible activity. It is not a price prediction.
+- A `partial` result means that some data could not be read. It does not mean that the missing data is empty.
 
-## Проверки
+## Honest limitations
+
+- I only scan a small recent range, up to 50 blocks or slots. This is not a search through all blockchain history. A complete history search needs a dedicated indexer.
+- The normal balance is only the network's main coin, such as ETH or SOL. I can check specific token contracts or Solana mints when I provide them, but this is not a complete token or NFT portfolio.
+- Some EVM transactions happen inside smart contracts and may not appear unless the RPC supports extra tracing methods.
+- The newest blocks or slots can sometimes be rearranged by the network. For important work, use a range that has already been confirmed.
+- Public RPC services can limit requests or may not support every method. When that happens, the app says the result is `partial` instead of pretending it is complete.
+- The app cannot tell whether an address is safe, profitable, or controlled by a particular person.
+
+## What I cannot honestly add yet
+
+I did not add a fake 0x quote button. The current 0x quote service needs an API key and can require a paid request, so a preview without those things would be dishonest.
+
+I also did not add a full historical indexer. That needs a hosted provider, credentials, and a different storage design. The local scanner stays small and predictable instead.
+
+## Networks and methods
+
+Ethereum-compatible networks use methods such as `eth_getBlockByNumber`, `eth_getCode`, `eth_getBalance`, `eth_getTransactionReceipt`, and optional `trace_block`.
+
+Solana uses methods such as `getSlot`, `getBlock`, `getMultipleAccounts`, `getBalance`, and optional `getTokenAccountsByOwner`.
+
+The full network list is in [`docs/CHAINS.md`](docs/CHAINS.md).
+
+## Development checks
+
+I run these checks before changing the project:
 
 ```bash
 npm test
@@ -137,32 +225,7 @@ npm run privacy:check
 npm run check
 ```
 
-Тесты полностью offline: fake RPC, без реальной сети и без расходования RPC quota.
-
-## Ограничения
-
-- Поиск ограниченRecent range; для исторического индекса нужен hosted indexer.
-- EVM balance показывает native currency, не полный token portfolio.
-- EVM activity не раскрывает internal transactions без trace-capable RPC.
-- Solana signer не равен доказанному владельцу человека; это публичный `wallet_candidate`.
-- Reorg safety зависит от выбранного RPC и подтверждённого диапазона.
-- «Все сети» может вернуть partial coverage, если публичный endpoint ограничен или не поддерживает нужный метод.
-
-## Дорожная карта
-
-- [x] EVM + Solana bounded scanner
-- [x] activity / balances / multichain modes
-- [x] responsive PWA + NDJSON live stream
-- [x] JSON / JSONL / CSV
-- [x] offline tests, lint, typecheck, privacy gate
-- [ ] optional hosted-indexer adapter
-- [ ] read-only token/NFT activity enrichment
-- [ ] EVM reorg lineage checkpoints
-- [ ] read-only 0x quote preview без execution
-
-## Contributing
-
-Нужны небольшие изолированные изменения, offline tests и объяснение privacy implication. Никогда не добавляйте реальные RPC keys, `.env`, адреса владельца, seed phrases или signed payloads в commits.
+The automated tests use fake RPC responses. They do not need real network access and do not use up RPC limits.
 
 ## License
 

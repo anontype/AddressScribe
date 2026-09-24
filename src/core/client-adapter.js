@@ -3,7 +3,15 @@ function isRecord(value) {
 }
 
 function unwrap(value) {
-  if (isRecord(value) && value.error) throw new Error("RPC request failed");
+  if (isRecord(value) && value.error) {
+    const error = new Error("RPC request failed");
+    const details = isRecord(value.error) ? value.error : {};
+    if (details.code !== undefined) error.code = details.code;
+    if (details.status !== undefined) error.status = details.status;
+    if (details.message !== undefined) error.rpcMessage = String(details.message);
+    error.rpcError = true;
+    throw error;
+  }
   return isRecord(value) && Object.hasOwn(value, "result") ? value.result : value;
 }
 

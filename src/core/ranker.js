@@ -51,6 +51,8 @@
  * @property {number} transactionCount
  * @property {number} sentTransactionCount
  * @property {number} receivedTransactionCount
+ * @property {number} internalTransactionCount
+ * @property {string} internalValue
  * @property {number} successfulTransactionCount
  * @property {number} failedTransactionCount
  * @property {number} feePayerTransactionCount
@@ -92,11 +94,15 @@ const EVIDENCE_FIELDS = [
   "role",
   "method",
   "value",
+  "valueWei",
   "fee",
+  "feeWei",
   "success",
   "status",
   "signature",
-  "feePayer"
+  "feePayer",
+  "callType",
+  "traceAddress"
 ];
 
 const SCORE_LIMITS = Object.freeze({
@@ -490,6 +496,8 @@ export function normalizeCandidate(input) {
     transactionCount: integerField(input.transactionCount ?? input.activityCount ?? input.txCount),
     sentTransactionCount: integerField(input.sentTransactionCount ?? input.senderTransactionCount),
     receivedTransactionCount: integerField(input.receivedTransactionCount ?? input.recipientTransactionCount),
+    internalTransactionCount: integerField(input.internalTransactionCount),
+    internalValue: firstQuantity(input.internalValue ?? input.internalValueWei).toString(),
     successfulTransactionCount: integerField(
       input.successfulTransactionCount ?? input.successCount ?? input.successfulTransactions
     ),
@@ -513,7 +521,9 @@ export function normalizeCandidate(input) {
     confidence: confidenceFor(input, classification, coverage),
     coverage,
     evidence: normalizeEvidence(input.evidence),
-    blockEvidence: normalizeEvidence(input.blockEvidence)
+    blockEvidence: normalizeEvidence(input.blockEvidence),
+    ...(Array.isArray(input.tokenBalances) ? { tokenBalances: toJsonSafe(input.tokenBalances) } : {}),
+    ...(isRecord(input.tokenEnrichment) ? { tokenEnrichment: toJsonSafe(input.tokenEnrichment) } : {})
   });
   const firstSeen = stringField(input.firstSeen ?? input.firstActivityAt);
   const lastSeen = stringField(input.lastSeen ?? input.lastActivityAt);

@@ -23,7 +23,11 @@ const errors = {
   scanner_unavailable: "Сканер недоступен.",
   static_unavailable: "Не удалось загрузить оболочку приложения.",
   server_restarting: "Сканер перезапускается.",
-  stream_closed: "Поток поиска закрылся до завершения."
+  stream_closed: "Поток поиска закрылся до завершения.",
+  invalid_enrichment: "Проверьте формат токена или mint.",
+  invalid_receipts: "Receipts можно включить только для EVM.",
+  invalid_traces: "Internal calls можно включить только для EVM.",
+  quote_unavailable: "0x quote не настроен на сервере."
 };
 
 function node(tag, className, text) {
@@ -42,6 +46,15 @@ function boundedInput(selector, fallback, minimum, maximum) {
   const number = Number($(selector).value);
   if (!Number.isFinite(number)) return fallback;
   return Math.min(maximum, Math.max(minimum, Math.trunc(number)));
+}
+
+function parseTokenSpecs(value) {
+  return value.split(/[,\n]/).map((item) => item.trim()).filter(Boolean).map((item) => {
+    const [chain, address, kind, decimals] = item.split(":").map((part) => part?.trim());
+    if (!chain || !address || (chain.toLowerCase() === "solana" ? !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(address) : !/^0x[0-9a-f]{40}$/i.test(address))) throw new Error("Проверьте формат токена или mint.");
+    if (decimals && (!/^\d+$/.test(decimals) || Number(decimals) > 255)) throw new Error("Decimals должны быть числом от 0 до 255.");
+    return { chain, address, ...(kind ? { kind } : {}), ...(decimals ? { decimals: Number(decimals) } : {}) };
+  });
 }
 
 function validBalance(value) {
@@ -107,6 +120,10 @@ function updateControls() {
   $("#chain-search").disabled = state.busy;
   $("#access-token").disabled = state.busy;
   $("#apply-token").disabled = state.busy;
+  $("#token-specs").disabled = state.busy;
+  $("#include-receipts").disabled = state.busy;
+  $("#include-traces").disabled = state.busy;
+  for (const selector of ["#quote-chain", "#quote-sell", "#quote-buy", "#quote-amount", "#quote-button"]) $(selector).disabled = state.busy;
 }
 
 function renderChains() {
@@ -172,6 +189,7 @@ async function loadChains() {
   try {
     const [health, payload] = await Promise.all([fetchJson("/api/health"), fetchJson("/api/chains")]);
     if (health.name !== "AddressScribe" || health.privacy?.readOnly !== true) throw new Error("Неожиданный ответ API");
+    if (health.features?.zeroExQuote === false) $("#quote-result").textContent = "0x quote не настроен на сервере.";
     state.chains = Array.isArray(payload.chains) ? payload.chains : [];
     if (!state.chains.length) throw new Error("Реестр сетей пуст");
     if (!state.chainsLoaded) {
@@ -242,7 +260,8 @@ function appendLive(candidate, result) {
   const row = node("div", "wallet-line");
   const addressNode = node("code", "", shortAddress(candidate.address));
   addressNode.title = candidate.address;
-  const meta = node("span", "wallet-meta", `${result.chain} · tx=${count(candidate.transactionCount)} · score=${count(candidate.activityScore)}`);
+  const tokenCount = Array.isArray(candidate.tokenBalances) ? candidate.tokenBalances.length : 0;
+  const meta = node("span", "wallet-meta", `${result.chain} · tx=${count(candidate.transactionCount)} · score=${count(candidate.activityScore)}${tokenCount ? ` · tokens=${tokenCount}` : ""}`);
   const balance = candidate.nativeBalanceFormatted ? `${candidate.nativeBalanceFormatted} ${result.symbol}` : "balance=?";
   const value = node("span", "wallet-balance", balance);
   const copy = node("button", "copy", "copy");
@@ -386,9 +405,36 @@ function resetRun() {
   updateSummary();
 }
 
+async function requestQuote() {
+  const result = $("#quote-result");
+  const chainId = $("#quote-chain").value.trim();
+  const sellToken = $("#quote-sell").value.trim();
+  const buyToken = $("#quote-buy").value.trim();
+  const sellAmount = $("#quote-amount").value.trim();
+  result.textContent = "Запрашиваю цену…";
+  try {
+    const query = new URLSearchParams({ chainId, sellToken, buyToken, sellAmount });
+    const response = await fetch(`/api/quote?${query}`, { cache: "no-store", credentials: "omit", headers: apiHeaders() });
+    const payload = await response.json().catch(() => null);
+    if (!response.ok || payload?.ok !== true) throw new Error(errors[payload?.error?.code] ?? payload?.error?.message ?? "Quote unavailable");
+    const quote = payload.quote ?? {};
+    result.textContent = `Price: ${quote.price ?? "—"} · network fee: ${quote.totalNetworkFee ?? "—"}`;
+  } catch (caught) {
+    result.textContent = caught.message;
+  }
+}
+
 async function runScan(event) {
   event.preventDefault();
   if (state.busy || !state.selected.size) return;
+  let tokenSpecs;
+  try {
+    tokenSpecs = parseTokenSpecs($("#token-specs").value);
+  } catch (caught) {
+    $("#error-text").textContent = caught.message;
+    $("#error").hidden = false;
+    return;
+  }
   resetRun();
   state.busy = true;
   state.controller = new AbortController();
@@ -398,7 +444,10 @@ async function runScan(event) {
     chains: [...state.selected],
     blocks: boundedInput("#depth", 2, 1, 50),
     concurrency: boundedInput("#concurrency", 4, 1, 8),
-    limit: boundedInput("#limit", 50, 1, 100)
+    limit: boundedInput("#limit", 50, 1, 100),
+    ...($("#include-receipts").checked ? { includeReceipts: true } : {}),
+    ...($("#include-traces").checked ? { includeTraces: true } : {}),
+    ...(tokenSpecs.length ? { enrich: { tokens: tokenSpecs } } : {})
   };
   log(`mode=${request.mode} chains=${request.chains.length}`, "info");
   try {
@@ -462,6 +511,7 @@ $("#modes").addEventListener("change", (event) => {
   $("#run-state").textContent = state.mode.toUpperCase();
 });
 $("#access-token").addEventListener("input", (event) => { state.token = event.target.value.trim(); });
+$("#quote-button").addEventListener("click", requestQuote);
 $("#apply-token").addEventListener("click", async () => {
   const button = $("#apply-token");
   button.disabled = true;

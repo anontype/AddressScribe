@@ -69,7 +69,7 @@ function containsForbiddenText(value, location) {
     return true;
   }
   const field = location.split(".").at(-1) ?? location;
-  const hashField = field === "hash" || field === "blockHash" || field === "blockhash" || field.endsWith("Hash");
+  const hashField = field.toLowerCase().endsWith("hash");
   return !hashField && BASE58_ADDRESS.test(value);
 }
 

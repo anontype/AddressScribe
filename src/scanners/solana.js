@@ -94,7 +94,7 @@ function inputQuantity(value, name) {
 }
 
 function publicKey(value) {
-  return typeof value === "string" && /^[1-9A-HJ-NP-Za-km-z0-9]{32,44}$/.test(value) ? value : null;
+  return typeof value === "string" && /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(value) ? value : null;
 }
 
 function signature(value) {
@@ -322,7 +322,7 @@ export async function scanSolana(options = {}) {
         } else if (response?.ok && isRecord(response.result)) {
           const block = response.result;
           blocks.set(group[index], block);
-          blockEvidence.push({ slot: group[index].toString(), blockhash: typeof block.blockhash === "string" ? block.blockhash : null });
+          blockEvidence.push({ slot: group[index].toString(), blockhash: typeof block.blockhash === "string" ? block.blockhash : null, previousBlockhash: typeof block.previousBlockhash === "string" ? block.previousBlockhash : null });
         } else {
           reasons.add("block-request-failed");
         }
@@ -337,7 +337,7 @@ export async function scanSolana(options = {}) {
             reasons.add("skipped-slots");
           } else if (isRecord(response)) {
             blocks.set(slot, response);
-            blockEvidence.push({ slot: slot.toString(), blockhash: typeof response.blockhash === "string" ? response.blockhash : null });
+            blockEvidence.push({ slot: slot.toString(), blockhash: typeof response.blockhash === "string" ? response.blockhash : null, previousBlockhash: typeof response.previousBlockhash === "string" ? response.previousBlockhash : null });
           } else {
             reasons.add("block-request-failed");
           }
@@ -355,6 +355,14 @@ export async function scanSolana(options = {}) {
     const b = BigInt(right.slot);
     return a < b ? -1 : a > b ? 1 : 0;
   });
+  let previousEvidence = null;
+  for (const evidence of blockEvidence) {
+    if (previousEvidence && BigInt(evidence.slot) === BigInt(previousEvidence.slot) + 1n && evidence.previousBlockhash && previousEvidence.blockhash && evidence.previousBlockhash !== previousEvidence.blockhash) {
+      reasons.add("reorg-detected");
+      break;
+    }
+    previousEvidence = evidence;
+  }
   const accumulator = new Map();
   let transactions = 0;
   let transactionCap = false;
@@ -448,6 +456,7 @@ export async function scanSolana(options = {}) {
     transactions: transactions.toString(),
     voteTransactionsSkipped: voteTransactions.toString(),
     candidates: candidates.length.toString(),
+    reorgDetected: reasons.has("reorg-detected"),
     transactionCap,
     cappedSlots,
     cappedTransactions: transactionCap,
@@ -457,6 +466,7 @@ export async function scanSolana(options = {}) {
   };
   const totalFees = allFeesKnown ? [...accumulator.values()].reduce((total, item) => total + item.totalFeesLamports, 0n) : null;
   const failedFees = allFeesKnown ? [...accumulator.values()].reduce((total, item) => total + item.failedFeesLamports, 0n) : null;
+  const headEvidence = blockEvidence.find((item) => item.slot === toSlot.toString());
   return {
     schemaVersion: SCHEMA_VERSION,
     chain: chain.id,
@@ -466,7 +476,7 @@ export async function scanSolana(options = {}) {
     explorerUrl: chain.explorerUrl,
     capabilities: chain.capabilities,
     zeroEx: chain.zeroEx,
-    range: { unit: "slots", from: effectiveFrom.toString(), to: toSlot.toString(), requested, capped: cappedSlots },
+    range: { unit: "slots", from: effectiveFrom.toString(), to: toSlot.toString(), requested, capped: cappedSlots, head: { slot: toSlot.toString(), blockhash: headEvidence?.blockhash ?? null, previousBlockhash: headEvidence?.previousBlockhash ?? null, commitment } },
     coverage,
     candidates,
     blockEvidence,

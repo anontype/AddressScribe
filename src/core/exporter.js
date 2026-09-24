@@ -16,6 +16,8 @@ export const ALLOWED_FIELDS = Object.freeze([
   "totalFees",
   "sentTransactionCount",
   "receivedTransactionCount",
+  "internalTransactionCount",
+  "internalValue",
   "uniqueCounterpartyCount",
   "methods",
   "firstSeen",
@@ -23,7 +25,9 @@ export const ALLOWED_FIELDS = Object.freeze([
   "evidence",
   "blockEvidence",
   "isContract",
-  "isProgram"
+  "isProgram",
+  "tokenBalances",
+  "tokenEnrichment"
 ]);
 
 export const DEFAULT_EXPORT_FIELDS = Object.freeze([

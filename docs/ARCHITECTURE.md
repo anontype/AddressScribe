@@ -60,6 +60,8 @@ Registry не содержит private keys и hosted credentials. Пользо�
 
 Batch fallback не переключает RPC для обхода rate limit. Это важно: максимальная скорость не должна превращаться в abuse чужих публичных endpoints.
 
+Optional `GET /api/quote` is a server-side read-only proxy to the 0x Allowance Holder price endpoint. It requires `ZEROEX_API_KEY`, accepts only bounded EVM price parameters, allowlists response fields, and never returns a transaction payload.
+
 ## EVM pipeline
 
 1. Получить head.
@@ -70,6 +72,8 @@ Batch fallback не переключает RPC для обхода rate limit. �
 6. Проверить `eth_getCode` batch chunks до 100 addresses.
 7. Исключить contracts; unknown оставить с partial confidence. Проверки classification используют отдельный bounded budget и не зависят от `--limit` результата.
 8. Нормализовать counters и activity score.
+9. При явном `--receipts` запросить bounded `eth_getTransactionReceipt` и заполнить status/fees без догадок.
+10. При явном `--traces` запросить bounded `trace_block` и добавить internal value evidence; если метод недоступен, coverage становится partial.
 
 Full block RPC обычно не содержит `gasUsed`/`effectiveGasPrice`. Fee не выдумывается: без этих полей он остаётся нулевым.
 
@@ -85,6 +89,13 @@ Full block RPC обычно не содержит `gasUsed`/`effectiveGasPrice`.
 8. Slot с `result: null` считать пропущенным, а не пустым блоком.
 
 Публичный signer — это `wallet_candidate`, а не доказательство человеческого владения.
+
+## Optional read-only enrichment
+
+- EVM `eth_call(balanceOf)` проверяет только явно переданные ERC-20/ERC-721 contracts.
+- Solana `getTokenAccountsByOwner` проверяет только явно переданные mints.
+- Wallet cap — 20, token cap — 20; calls и ответы bounded.
+- Unsupported RPC не ломает основной scan: coverage получает `token-rpc-unsupported` или `token-balance-incomplete`.
 
 ## Modes
 
@@ -133,7 +144,7 @@ Partial coverage никогда не маскируется под пустой 
 
 ## Storage and output
 
-Default PWA не сохраняет API responses. CLI пишет файл только по явному `--output` с mode `0600`. JSONL предпочтительнее для больших результатов. Checkpoint store допускает только cursor/hash/coverage и никогда не сохраняет RPC URL или адреса.
+Default PWA не сохраняет API responses. CLI пишет файл только по явному `--output` с mode `0600`. JSONL предпочтительнее для больших результатов. Checkpoint store допускает только cursor/hash/coverage и никогда не сохраняет RPC URL или адреса. При `--state-file` CLI сохраняет только range cursors, block/slot hashes и coverage; server и PWA не пишут checkpoints.
 
 ## Scaling path
 

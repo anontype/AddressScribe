@@ -105,6 +105,56 @@ test("EVM classification marks unclassified tail candidates as partial", async (
   assert.ok(result.candidates.some((item) => item.classification === "unknown"));
 });
 
+test("EVM scanner can enrich receipt status and fees when requested", async () => {
+  const noBlockFee = { ...transaction(1, sender, recipient), gas: undefined, gasUsed: undefined, gasPrice: undefined };
+  const client = {
+    call: async (method) => {
+      if (method === "eth_getBlockByNumber") return block(1, [noBlockFee]);
+      if (method === "eth_getCode") return "0x";
+      if (method === "eth_getTransactionReceipt") return { status: "0x1", gasUsed: "0x2", effectiveGasPrice: "0x3" };
+      throw new Error("unexpected method");
+    }
+  };
+  const result = await scanEvm({ chain, client, fromBlock: 1, toBlock: 1, includeReceipts: true });
+  assert.equal(result.candidates[0].successfulTransactionCount, 1);
+  assert.equal(result.candidates[0].totalFees, "6");
+  assert.equal(result.coverage.receiptsStatus, "complete");
+  assert.equal(result.coverage.receiptsFetched, "1");
+});
+
+test("EVM scanner can read internal value transfers when trace_block is available", async () => {
+  const client = {
+    call: async (method) => {
+      if (method === "eth_getBlockByNumber") return block(1, [transaction(1, sender, recipient)]);
+      if (method === "eth_getCode") return "0x";
+      if (method === "trace_block") return [{ type: "call", transactionHash: transaction(9, sender, recipient).hash, action: { from: sender, to: recipient, value: "0x20" } }];
+      throw new Error("unexpected method");
+    }
+  };
+  const result = await scanEvm({ chain, client, fromBlock: 1, toBlock: 1, includeTraces: true });
+  const senderCandidate = result.candidates.find((item) => item.address === sender);
+  assert.equal(senderCandidate.internalTransactionCount, 1);
+  assert.equal(senderCandidate.internalValue, "32");
+  assert.equal(result.coverage.traceStatus, "complete");
+  assert.equal(result.coverage.internalTransactions, "1");
+});
+
+test("EVM scanner records block lineage and marks a parent mismatch", async () => {
+  const first = { ...block(1, []), parentHash: `0x${"00".repeat(32)}` };
+  const second = { ...block(2, []), parentHash: `0x${"33".repeat(32)}` };
+  const client = {
+    call: async (method, params) => {
+      if (method === "eth_getBlockByNumber") return Number(BigInt(params[0])) === 1 ? first : second;
+      throw new Error("unexpected method");
+    }
+  };
+  const result = await scanEvm({ chain, client, fromBlock: 1, toBlock: 2 });
+  assert.equal(result.coverage.reorgDetected, true);
+  assert.equal(result.coverage.reasons.includes("reorg-detected"), true);
+  assert.equal(result.blockEvidence[0].parentHash, first.parentHash);
+  assert.equal(result.range.head.hash, second.hash);
+});
+
 test("EVM scanner enforces range, transaction, and concurrency caps", async () => {
   let active = 0;
   let maximumActive = 0;

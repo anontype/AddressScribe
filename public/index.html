@@ -88,6 +88,25 @@
           </label>
         </div>
 
+        <details class="advanced-options">
+          <summary>Дополнительные проверки</summary>
+          <label>Токены или NFT<input id="token-specs" type="text" autocomplete="off" placeholder="chain:address:erc20:18, solana:Mint:spl-token"></label>
+          <label class="check-row"><input id="include-receipts" type="checkbox">Прочитать receipts EVM</label>
+          <label class="check-row"><input id="include-traces" type="checkbox">Прочитать internal calls EVM</label>
+          <p>Токены нужно указать вручную. Если RPC не поддерживает метод, результат будет помечен как partial.</p>
+          <fieldset class="quote-form">
+            <legend>0x price preview (optional)</legend>
+            <div class="quote-grid">
+              <label>Chain ID<input id="quote-chain" type="number" inputmode="numeric" value="1" min="1"></label>
+              <label>Sell token<input id="quote-sell" type="text" autocomplete="off" placeholder="0x..."></label>
+              <label>Buy token<input id="quote-buy" type="text" autocomplete="off" placeholder="0x..."></label>
+              <label>Sell amount<input id="quote-amount" type="text" inputmode="numeric" placeholder="1000000"></label>
+            </div>
+            <button class="button ghost" id="quote-button" type="button">Get price</button>
+            <p id="quote-result" role="status" aria-live="polite"></p>
+          </fieldset>
+        </details>
+
         <details class="remote-access">
           <summary>Удалённый доступ</summary>
           <div class="token-row">

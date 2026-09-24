@@ -6,6 +6,7 @@ import { SCHEMA_VERSION } from "../core/ranker.js";
 import { compareBigInt, formatUnits } from "../core/units.js";
 import { EVM_LIMITS, scanEvm } from "./evm.js";
 import { SOLANA_LIMITS, scanSolana } from "./solana.js";
+import { enrichTokenBalances, validateTokenEnrichment } from "./tokens.js";
 
 const MODES = new Set(["activity", "balances", "multichain"]);
 const MAX_CHAINS = CHAIN_REGISTRY.length;
@@ -38,10 +39,13 @@ function validateRequest(request) {
   const blocks = request.blocks ?? 10;
   const concurrency = request.concurrency ?? 4;
   const limit = request.limit ?? 50;
-  if (!Number.isSafeInteger(blocks) || blocks < 1 || blocks > MAX_BLOCKS) throw new RangeError(`Blocks must be an integer from 1 to ${MAX_BLOCKS}`);
+  if (!Number.isSafeInteger(blocks) || blocks < 1 || blocks > MAX_BLOCKS) throw new RangeError("Blocks must be an integer from 1 to 50");
   if (!Number.isSafeInteger(concurrency) || concurrency < 1 || concurrency > MAX_CONCURRENCY) throw new RangeError(`Concurrency must be an integer from 1 to ${MAX_CONCURRENCY}`);
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_LIMIT) throw new RangeError(`Limit must be an integer from 1 to ${MAX_LIMIT}`);
-  return { mode, chains: ids, blocks, concurrency, limit };
+  if (request.includeReceipts !== undefined && typeof request.includeReceipts !== "boolean") throw new TypeError("includeReceipts must be a boolean");
+  if (request.includeTraces !== undefined && typeof request.includeTraces !== "boolean") throw new TypeError("includeTraces must be a boolean");
+  const enrich = validateTokenEnrichment(request.enrich, ids);
+  return { mode, chains: ids, blocks, concurrency, limit, enrich, includeReceipts: request.includeReceipts === true, includeTraces: request.includeTraces === true };
 }
 
 function unwrap(response) {
@@ -225,7 +229,8 @@ function mergeWallets(results, limit) {
         failedTransactionCount: 0,
         chains: [],
         chainDetails: [],
-        nativeBalances: []
+        nativeBalances: [],
+        tokenBalances: []
       };
       current.activityScore += candidate.activityScore;
       current.transactionCount += candidate.transactionCount;
@@ -240,20 +245,27 @@ function mergeWallets(results, limit) {
         classification: candidate.classification,
         nativeBalance: candidate.nativeBalance ?? null,
         nativeBalanceFormatted: candidate.nativeBalanceFormatted ?? null,
+        ...(Array.isArray(candidate.tokenBalances) ? { tokenBalances: candidate.tokenBalances } : {}),
+        ...(candidate.tokenEnrichment ? { tokenEnrichment: candidate.tokenEnrichment } : {}),
         coverage: combineCoverage(candidate.coverage, result.coverage)
       });
       if (candidate.nativeBalance != null) {
         current.nativeBalances.push({ chain: result.chain, symbol: result.symbol, raw: candidate.nativeBalance, formatted: candidate.nativeBalanceFormatted });
       }
+      if (Array.isArray(candidate.tokenBalances)) current.tokenBalances.push(...candidate.tokenBalances);
       merged.set(key, current);
     }
   }
-  return [...merged.values()].map((item) => ({
-    ...item,
-    activityScore: Math.min(100, item.activityScore),
-    chainCount: item.chains.length,
-    coverage: combineCoverage(...item.chainDetails.map((detail) => detail.coverage))
-  })).sort((left, right) => right.activityScore - left.activityScore || left.address.localeCompare(right.address)).slice(0, limit);
+  return [...merged.values()].map((item) => {
+    const { tokenBalances, ...base } = item;
+    return {
+      ...base,
+      activityScore: Math.min(100, item.activityScore),
+      chainCount: item.chains.length,
+      ...(tokenBalances.length ? { tokenBalances, tokenEnrichment: combineCoverage(...item.chainDetails.map((detail) => detail.tokenEnrichment).filter(Boolean)) } : {}),
+      coverage: combineCoverage(...item.chainDetails.map((detail) => detail.coverage))
+    };
+  }).sort((left, right) => right.activityScore - left.activityScore || left.address.localeCompare(right.address)).slice(0, limit);
 }
 
 function flattenWallets(results, mode, limit) {
@@ -333,7 +345,7 @@ export async function scanChains(input, options = {}) {
           ? BigInt(unwrap(await rpc.call("eth_blockNumber", [], signal)))
           : BigInt(unwrap(await rpc.call("getSlot", [{ commitment: "finalized" }], signal)));
         const result = chain.family === "evm"
-          ? await scanEvm({ chain, client, head, blocks: request.blocks, concurrency: Math.min(request.concurrency, 4), maxCodeChecks: EVM_LIMITS.codeChecks, signal, onProgress: options.onProgress })
+          ? await scanEvm({ chain, client, head, blocks: request.blocks, concurrency: Math.min(request.concurrency, 4), maxCodeChecks: EVM_LIMITS.codeChecks, includeReceipts: request.includeReceipts, maxReceipts: options.maxReceipts, includeTraces: request.includeTraces, maxTraceBlocks: options.maxTraceBlocks, signal, onProgress: options.onProgress })
           : await scanSolana({ chain, client, head, blocks: request.blocks, concurrency: Math.min(request.concurrency, 4), maxAccountChecks: SOLANA_LIMITS.accountChecks, signal, onProgress: options.onProgress });
         if (request.mode === "balances") {
           result.candidates = await enrichBalances(result, client, chain, request.limit, signal);
@@ -342,6 +354,17 @@ export async function scanChains(input, options = {}) {
           result.coverage.partial = result.coverage.reasons.length > 0;
           result.coverage.complete = !result.coverage.partial;
           result.coverage.status = result.coverage.partial ? "partial" : "complete";
+        }
+        if (request.enrich) {
+          const tokenResult = await enrichTokenBalances({ chain, client, candidates: result.candidates, tokens: request.enrich.tokens, signal });
+          if (tokenResult.coverage) {
+            result.candidates = tokenResult.candidates;
+            result.tokenEnrichment = tokenResult.coverage;
+            result.coverage.reasons = [...new Set([...result.coverage.reasons, ...tokenResult.coverage.reasons])].sort();
+            result.coverage.partial = result.coverage.reasons.length > 0;
+            result.coverage.complete = !result.coverage.partial;
+            result.coverage.status = result.coverage.partial ? "partial" : "complete";
+          }
         }
         const discoveredCandidates = result.candidates.length;
         result.candidates = result.candidates.slice(0, request.limit);
@@ -363,7 +386,7 @@ export async function scanChains(input, options = {}) {
       schema: "addressscribe/scan/v1",
       mode: request.mode,
       createdAt: timestamp(options),
-      request: { chains: request.chains, blocks: request.blocks, concurrency: request.concurrency, limit: request.limit },
+      request: { chains: request.chains, blocks: request.blocks, concurrency: request.concurrency, limit: request.limit, ...(request.includeReceipts ? { includeReceipts: true } : {}), ...(request.includeTraces ? { includeTraces: true } : {}), ...(request.enrich ? { enrich: request.enrich } : {}) },
       summary: {
         chains: results.length,
         complete: results.filter((result) => result.coverage.complete).length,
@@ -380,8 +403,9 @@ export async function scanChains(input, options = {}) {
 }
 
 export async function scan(options = {}) {
-  return scanChains({ chains: [options.chain ?? "ethereum"], blocks: options.blocks, concurrency: options.concurrency, mode: "activity" }, options);
+  return scanChains({ chains: [options.chain ?? "ethereum"], blocks: options.blocks, concurrency: options.concurrency, mode: "activity", enrich: options.enrich, includeReceipts: options.includeReceipts, includeTraces: options.includeTraces }, options);
 }
 
 export * from "./evm.js";
 export * from "./solana.js";
+export * from "./tokens.js";

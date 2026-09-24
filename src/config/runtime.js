@@ -40,7 +40,7 @@ export const RUNTIME_LIMITS = Object.freeze({
   maxRetries: 5,
   maxRequestsPerSecond: 1000,
   maxBurst: 100,
-  maxResponseBytes: 16 * 1024 * 1024,
+  maxResponseBytes: 32 * 1024 * 1024,
   maxBatchSize: 100
 });
 

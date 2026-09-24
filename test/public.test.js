@@ -18,6 +18,12 @@ test("PWA keeps token recovery, stream validation, and privacy boundaries explic
   assert.match(app, /stream_closed/);
   assert.match(app, /validBalance/);
   assert.match(html, /id="apply-token"/);
+  assert.match(html, /id="token-specs"/);
+  assert.match(html, /id="include-receipts"/);
+  assert.match(html, /id="include-traces"/);
+  assert.match(html, /id="quote-button"/);
+  assert.match(app, /parseTokenSpecs/);
+  assert.match(app, /requestQuote/);
   assert.match(html, /scope="col"/);
   assert.match(worker, /self\.skipWaiting\(\)/);
   assert.match(worker, /self\.clients\.claim\(\)/);

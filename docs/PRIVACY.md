@@ -39,6 +39,9 @@
 - URL userinfo, query и secret path редактируются в ошибках.
 - API `/api/chains` не возвращает RPC URLs.
 - CLI output path создаётся с mode `0600`.
+- Token contracts/mints, receipts and traces are public read-only inputs; they are not credentials and are never sent to signing or execution methods.
+- An optional 0x price preview reads `ZEROEX_API_KEY` on the server and returns only price fields. It never accepts or creates a signed transaction.
+- `--state-file` stores only range cursors, block/slot hashes and coverage; wallet addresses and RPC URLs are rejected by the checkpoint validator.
 
 ## Browser
 

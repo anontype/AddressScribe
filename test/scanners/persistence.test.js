@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CheckpointCorruptedError, CheckpointStore } from "../../src/core/checkpoint-store.js";
 import { exportCsv, exportJson } from "../../src/core/exporter.js";
+import { applyCheckpointComparison } from "../../src/cli.js";
 
 test("checkpoint store writes only cursor/hash/coverage atomically with mode 0600", async () => {
   const directory = await mkdtemp(join(tmpdir(), "wallet-finder-"));
@@ -57,8 +58,34 @@ test("checkpoint key validation does not reject ordinary words containing key", 
   }
 });
 
+test("checkpoint keeps safe range lineage hashes for both chain families", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "wallet-finder-"));
+  const path = join(directory, "checkpoint.json");
+  try {
+    const store = new CheckpointStore(path);
+    await store.save({
+      cursor: { chain: "solana", headBlockhash: "A11111111111111111111111111111111111111", next: "21" },
+      hash: null,
+      coverage: { reorgDetected: false }
+    });
+    assert.equal((await store.load()).cursor.headBlockhash, "A11111111111111111111111111111111111111");
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("checkpoint mode cannot be widened", () => {
   assert.throws(() => new CheckpointStore("/tmp/addressscribe-checkpoint.json", { mode: 0o644 }), /0600/);
+});
+
+test("checkpoint comparison marks an overlapping hash change as a reorg", () => {
+  const result = {
+    results: [{ chain: "ethereum", coverage: { status: "complete", complete: true, partial: false, reasons: [] }, blockEvidence: [{ blockNumber: "10", blockHash: "0xnew" }] }],
+    summary: { complete: 1, partial: 0 }
+  };
+  applyCheckpointComparison(result, { cursor: { chains: [{ chain: "ethereum", to: "10", headHash: "0xold" }] } });
+  assert.equal(result.results[0].coverage.reasons.includes("reorg-detected"), true);
+  assert.equal(result.summary.partial, 1);
 });
 
 test("JSON and CSV exporters are allowlisted, escaped, and deterministic", () => {

@@ -7,6 +7,7 @@ import { CHAIN_REGISTRY, publicChain } from "./config/chains.js";
 import { redactData, sanitizeErrorText } from "./core/privacy.js";
 import { toJsonSafe } from "./core/ranker.js";
 import { scanChains } from "./scanners/index.js";
+import { validateTokenEnrichment } from "./scanners/tokens.js";
 
 const NAME = "AddressScribe";
 const VERSION = "0.1.0";
@@ -93,6 +94,18 @@ function validateToken(token) {
   return value;
 }
 
+function validateApiKey(value) {
+  if (value !== undefined && value !== null && typeof value !== "string") throw new TypeError("ZEROEX_API_KEY is invalid");
+  const text = String(value ?? "");
+  let hasControl = false;
+  for (const character of text) {
+    const code = character.codePointAt(0) ?? 0;
+    if (code < 32 || code === 127) hasControl = true;
+  }
+  if (text && (text.length < 16 || text.length > 512 || hasControl)) throw new TypeError("ZEROEX_API_KEY is invalid");
+  return text;
+}
+
 function booleanValue(value, name) {
   if (value === undefined || value === null || value === "") return false;
   if (typeof value === "boolean") return value;
@@ -106,6 +119,7 @@ export function readServerConfig(env = process.env, overrides = {}) {
   const host = validateHost(overrides.host ?? envValue(env, "ADDRESSSCRIBE_HOST") ?? "127.0.0.1");
   const port = integerValue(overrides.port ?? envValue(env, "ADDRESSSCRIBE_PORT") ?? envValue(env, "PORT"), "ADDRESSSCRIBE_PORT", 0, 65535) ?? 4173;
   const token = validateToken(overrides.token ?? envValue(env, "ADDRESSSCRIBE_TOKEN") ?? "");
+  const zeroExApiKey = validateApiKey(overrides.zeroExApiKey ?? envValue(env, "ZEROEX_API_KEY") ?? "");
   const allowInsecureLan = booleanValue(overrides.allowInsecureLan ?? envValue(env, "ADDRESSSCRIBE_ALLOW_INSECURE_LAN"), "ADDRESSSCRIBE_ALLOW_INSECURE_LAN");
   const rateLimit = integerValue(overrides.rateLimit ?? envValue(env, "ADDRESSSCRIBE_RATE_LIMIT"), "ADDRESSSCRIBE_RATE_LIMIT", 1, 10000) ?? 90;
   const rateWindowMs = integerValue(overrides.rateWindowMs ?? envValue(env, "ADDRESSSCRIBE_RATE_WINDOW_MS"), "ADDRESSSCRIBE_RATE_WINDOW_MS", 1000, 3600000) ?? 60000;
@@ -115,7 +129,7 @@ export function readServerConfig(env = process.env, overrides = {}) {
   const secure = !isLoopback(host);
   if (secure && !token) throw new Error("ADDRESSSCRIBE_TOKEN is required for a non-loopback bind");
   if (secure && !allowInsecureLan) throw new Error("Non-loopback binds require an HTTPS reverse proxy; set ADDRESSSCRIBE_ALLOW_INSECURE_LAN=1 only for a trusted test network");
-  return Object.freeze({ host, port, token, secure, allowInsecureLan, rateLimit, rateWindowMs, scanTimeoutMs, maxActiveScans, maxBodyBytes });
+  return Object.freeze({ host, port, token, zeroExApiKey, secure, allowInsecureLan, rateLimit, rateWindowMs, scanTimeoutMs, maxActiveScans, maxBodyBytes });
 }
 
 export function isLoopbackHost(host) {
@@ -149,7 +163,7 @@ function error(response, status, code, message, headers = {}) {
 
 function validateScan(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new RequestError(400, "invalid_request", "A JSON object is required.");
-  const allowed = new Set(["mode", "chains", "blocks", "concurrency", "limit"]);
+  const allowed = new Set(["mode", "chains", "blocks", "concurrency", "limit", "enrich", "includeReceipts", "includeTraces"]);
   if (Object.keys(value).some((key) => !allowed.has(key))) throw new RequestError(400, "invalid_request", "The request contains unsupported fields.");
   const mode = value.mode ?? "activity";
   if (!["activity", "balances", "multichain"].includes(mode)) throw new RequestError(400, "invalid_mode", "Choose activity, balances, or multichain.");
@@ -162,7 +176,89 @@ function validateScan(value) {
   if (!Number.isSafeInteger(blocks) || blocks < 1 || blocks > MAX_BLOCKS) throw new RequestError(400, "invalid_blocks", `Blocks must be an integer from 1 to ${MAX_BLOCKS}.`);
   if (!Number.isSafeInteger(concurrency) || concurrency < 1 || concurrency > MAX_CONCURRENCY) throw new RequestError(400, "invalid_concurrency", `Concurrency must be an integer from 1 to ${MAX_CONCURRENCY}.`);
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > MAX_LIMIT) throw new RequestError(400, "invalid_limit", `Limit must be an integer from 1 to ${MAX_LIMIT}.`);
-  return { mode, chains: ids, blocks, concurrency, limit };
+  if (value.includeReceipts !== undefined && typeof value.includeReceipts !== "boolean") throw new RequestError(400, "invalid_receipts", "includeReceipts must be true or false.");
+  if (value.includeTraces !== undefined && typeof value.includeTraces !== "boolean") throw new RequestError(400, "invalid_traces", "includeTraces must be true or false.");
+  let enrich = null;
+  if (value.enrich !== undefined) {
+    try {
+      enrich = validateTokenEnrichment(value.enrich, ids);
+    } catch (error) {
+      throw new RequestError(400, "invalid_enrichment", sanitizeErrorText(error instanceof Error ? error.message : error));
+    }
+  }
+  return { mode, chains: ids, blocks, concurrency, limit, enrich, includeReceipts: value.includeReceipts === true, includeTraces: value.includeTraces === true };
+}
+
+const QUOTE_FIELDS = Object.freeze(["chainId", "sellToken", "buyToken", "sellAmount", "price", "totalNetworkFee", "gasPrice", "tokenMetadata", "issues", "zid"]);
+
+function isRecord(value) {
+  return value && typeof value === "object" && !Array.isArray(value);
+}
+
+function quoteParameter(request, name) {
+  const params = new URL(request.url ?? "/", "http://localhost").searchParams;
+  return params.get(name);
+}
+
+async function quoteEndpoint(request, response, config, fetchImpl) {
+  if (request.method !== "GET") {
+    error(response, 405, "method_not_allowed", "Method not allowed.", { Allow: "GET" });
+    return;
+  }
+  if (!config.zeroExApiKey) {
+    error(response, 503, "quote_unavailable", "0x quotes are not configured on this server.");
+    return;
+  }
+  const allowed = new Set(["chainId", "sellToken", "buyToken", "sellAmount"]);
+  const params = new URL(request.url ?? "/", "http://localhost").searchParams;
+  if ([...params.keys()].some((key) => !allowed.has(key))) {
+    error(response, 400, "invalid_quote", "Quote accepts chainId, sellToken, buyToken, and sellAmount.");
+    return;
+  }
+  const chainId = quoteParameter(request, "chainId") ?? "";
+  const sellToken = quoteParameter(request, "sellToken") ?? "";
+  const buyToken = quoteParameter(request, "buyToken") ?? "";
+  const sellAmount = quoteParameter(request, "sellAmount") ?? "";
+  const quoteChain = CHAIN_REGISTRY.find((chain) => String(chain.chainId) === chainId);
+  if (!/^\d{1,20}$/.test(chainId) || quoteChain?.family !== "evm" || !/^0x[0-9a-f]{40}$/i.test(sellToken) || !/^0x[0-9a-f]{40}$/i.test(buyToken) || !/^\d{1,78}$/.test(sellAmount)) {
+    error(response, 400, "invalid_quote", "Use a supported EVM chain, two token addresses, and a numeric sellAmount.");
+    return;
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10000);
+  timer.unref?.();
+  try {
+    const upstream = await fetchImpl(`https://api.0x.org/swap/allowance-holder/price?${new URLSearchParams({ chainId, sellToken, buyToken, sellAmount })}`, {
+      method: "GET",
+      redirect: "error",
+      headers: { "0x-api-key": config.zeroExApiKey, "0x-version": "v2", Accept: "application/json" },
+      signal: controller.signal
+    });
+    const text = await upstream.text();
+    if (text.length > 524288) {
+      error(response, 502, "quote_unavailable", "The 0x response was too large.");
+      return;
+    }
+    if (!upstream.ok) {
+      error(response, 502, "quote_unavailable", "0x did not return a quote.");
+      return;
+    }
+    let payload;
+    try {
+      payload = JSON.parse(text);
+    } catch {
+      error(response, 502, "quote_unavailable", "0x returned an unreadable quote.");
+      return;
+    }
+    const result = {};
+    for (const field of QUOTE_FIELDS) if (isRecord(payload) && Object.hasOwn(payload, field)) result[field] = payload[field];
+    json(response, 200, { ok: true, quote: redactData(toJsonSafe(result)) });
+  } catch (caught) {
+    if (caught?.name === "AbortError") error(response, 504, "quote_timeout", "The 0x quote request timed out.");
+    else error(response, 502, "quote_unavailable", "The 0x quote service could not be reached.");
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function readJson(request, maximum) {
@@ -419,6 +515,7 @@ async function runScan(scan, request, response, normalized, options) {
 
 export function createServer(options = {}) {
   const config = readServerConfig(options.env ?? process.env, options);
+  const quoteFetch = options.fetchImpl ?? fetch;
   const scan = options.scanChains ?? scanChains;
   const consume = fixedWindowLimiter(config.rateLimit, config.rateWindowMs, options.clock);
   const activeScans = new Set();
@@ -436,10 +533,11 @@ export function createServer(options = {}) {
           ok: true,
           name: NAME,
           version: VERSION,
-          privacy: { readOnly: true, cookies: false, browserStorage: false, telemetry: false, privateKeyAccess: false }
+          privacy: { readOnly: true, cookies: false, browserStorage: false, telemetry: false, privateKeyAccess: false },
+          features: { zeroExQuote: Boolean(config.zeroExApiKey) }
         });
       }
-      const protectedApi = path === "/api/chains" || path === "/api/scan" || path === "/api/scan/stream";
+      const protectedApi = path === "/api/chains" || path === "/api/scan" || path === "/api/scan/stream" || path === "/api/quote";
       if (protectedApi) {
         const key = request.socket.remoteAddress || "unknown";
         const rate = consume(key);
@@ -453,6 +551,7 @@ export function createServer(options = {}) {
         for (const [name, value] of Object.entries(rateHeaders)) response.setHeader(name, value);
         if (config.secure && !tokenMatches(request.headers["x-addressscribe-token"], config.token)) return error(response, 401, "unauthorized", "A valid AddressScribe token is required.", { "WWW-Authenticate": "AddressScribe" });
       }
+      if (path === "/api/quote") return quoteEndpoint(request, response, config, quoteFetch);
       if (path === "/api/chains") {
         if (request.method !== "GET" && request.method !== "HEAD") return error(response, 405, "method_not_allowed", "Method not allowed.", { Allow: "GET, HEAD" });
         return json(response, 200, { ok: true, chains: CHAIN_REGISTRY.map(publicChain) });
@@ -465,7 +564,7 @@ export function createServer(options = {}) {
       if (path === "/api/scan/stream") {
         normalized.stream = true;
         response.writeHead(200, { "Cache-Control": "no-store", "Connection": "keep-alive", "Content-Type": "application/x-ndjson; charset=utf-8", "X-Accel-Buffering": "no" });
-        ndjson(response, { type: "started", request: { mode: normalized.mode, chains: normalized.chains, blocks: normalized.blocks, concurrency: normalized.concurrency, limit: normalized.limit }, chainCount: normalized.chains.length });
+        ndjson(response, { type: "started", request: { mode: normalized.mode, chains: normalized.chains, blocks: normalized.blocks, concurrency: normalized.concurrency, limit: normalized.limit, ...(normalized.includeReceipts ? { includeReceipts: true } : {}), ...(normalized.includeTraces ? { includeTraces: true } : {}), ...(normalized.enrich ? { enrich: normalized.enrich } : {}) }, chainCount: normalized.chains.length });
         const streamScan = async (requestValue, scanOptions) => {
           scanOptions.onResult = (result) => ndjson(response, { type: "chain", result: safeResult(result) });
           scanOptions.onProgress = (progress) => ndjson(response, { type: "progress", progress: scrubResult(toJsonSafe(progress)) });

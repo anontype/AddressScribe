@@ -50,3 +50,5 @@ Registry is intentionally explicit. A chain is listed when the project has a bou
 4. Re-run `npm run check` and a one-block live smoke test.
 
 A registry entry does not imply archive access, full historical indexing, WSS, gasless execution or swap execution.
+
+Optional enrichment is explicit and best-effort: EVM uses `eth_call` for user-supplied ERC-20/ERC-721 contracts, Solana uses `getTokenAccountsByOwner` for user-supplied mints, and EVM receipts/traces are only attempted when explicitly requested. A public RPC may not support those methods; the result is then marked partial.

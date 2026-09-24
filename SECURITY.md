@@ -19,7 +19,7 @@
 
 ## Security boundaries
 
-Проект read-only. Сообщения о key generation, signing, transaction submission, allowance mutation, telemetry или persistent browser identity рассматриваются как security defects, а не feature requests.
+Проект read-only. Optional 0x price preview использует только server-side `ZEROEX_API_KEY` и возвращает price fields; он не создаёт и не подписывает transaction. Сообщения о key generation, signing, transaction submission, allowance mutation, telemetry или persistent browser identity рассматриваются как security defects, а не feature requests.
 
 ## Disclosure
 

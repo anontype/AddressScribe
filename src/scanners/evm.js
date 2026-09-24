@@ -118,14 +118,162 @@ function checkPriority(items, limit) {
   return [...items].sort((left, right) => right.transactionCount - left.transactionCount || right.counterparties.size - left.counterparties.size || left.address.localeCompare(right.address)).slice(0, limit);
 }
 
+function unsupportedMethod(error) {
+  const code = String(error?.code ?? "");
+  const status = Number(error?.status ?? 0);
+  const message = String(error?.message ?? error?.rpcMessage ?? "");
+  return code === "-32601" || code === "-32602" || status === 404 || status === 405 || /not supported|not available|not implemented|unsupported|method not found|no such method/i.test(message);
+}
+
+function receiptFee(receipt) {
+  const gasUsed = optionalQuantity(receipt?.gasUsed);
+  const gasPrice = optionalQuantity(receipt?.effectiveGasPrice ?? receipt?.gasPrice);
+  return gasUsed === null || gasPrice === null ? null : gasUsed * gasPrice;
+}
+
+function traceItems(value) {
+  if (Array.isArray(value)) return value.flatMap((item) => traceItems(item));
+  if (!isRecord(value)) return [];
+  if (Array.isArray(value.result)) return value.result.flatMap((item) => traceItems(item));
+  if (isRecord(value.result)) return traceItems(value.result);
+  const calls = Array.isArray(value.calls) ? value.calls.flatMap((item) => traceItems(item)) : [];
+  if (value.error || (isRecord(value.action) && value.action.error)) return calls;
+  const action = isRecord(value.action) ? value.action : value;
+  const from = address(action.from);
+  const to = address(action.to ?? action.toAddress);
+  const amount = quantity(action.value ?? action.valueWei);
+  if (!from || !to || amount <= 0n) return calls;
+  return calls.concat([{
+    from,
+    to,
+    value: amount,
+    transactionHash: typeof value.transactionHash === "string" ? value.transactionHash : null,
+    traceAddress: Array.isArray(value.traceAddress) ? value.traceAddress.join(".") : null,
+    callType: typeof value.type === "string" ? value.type : (typeof action.callType === "string" ? action.callType : "call")
+  }]);
+}
+
+async function fetchTraces(blocks, rpc, concurrency, signal, maxTraceBlocks, reasons) {
+  const selected = [...blocks.keys()].slice(0, maxTraceBlocks);
+  if (!selected.length) return { traces: new Map(), requested: 0, fetched: 0, status: "not-requested", method: null };
+  if (selected.length < blocks.size) reasons.add("trace-block-cap");
+  let responses = null;
+  try {
+    responses = await rpc.batch(selected.map((block) => ({ method: "trace_block", params: [hex(block)] })), signal);
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    if (unsupportedMethod(error) || error?.code === "rate_limited") responses = selected.map(() => ({ ok: false, error }));
+  }
+  if (!Array.isArray(responses) || responses.length !== selected.length) {
+    responses = await mapConcurrent(selected, concurrency, async (block) => {
+      try {
+        return { ok: true, result: await rpc.call("trace_block", [hex(block)], signal) };
+      } catch (error) {
+        if (signal?.aborted) throw error;
+        return { ok: false, error };
+      }
+    });
+  }
+  const fallbackIndices = responses.flatMap((response, index) => response?.ok || response?.error?.code === "rate_limited" ? [] : [index]);
+  let usedFallback = false;
+  if (fallbackIndices.length) {
+    const fallbackResponses = await mapConcurrent(fallbackIndices, concurrency, async (index) => {
+      try {
+        const result = await rpc.call("debug_traceBlockByNumber", [hex(selected[index]), { tracer: "callTracer" }], signal);
+        usedFallback = true;
+        return { ok: true, result };
+      } catch (error) {
+        if (signal?.aborted) throw error;
+        return { ok: false, error };
+      }
+    });
+    for (let index = 0; index < fallbackIndices.length; index += 1) responses[fallbackIndices[index]] = fallbackResponses[index];
+  }
+  const traces = new Map();
+  let fetched = 0;
+  let complete = selected.length === blocks.size;
+  for (let index = 0; index < selected.length; index += 1) {
+    const response = responses[index];
+    if (response?.ok) {
+      traces.set(selected[index], traceItems(response.result));
+      fetched += 1;
+    } else {
+      complete = false;
+      if (unsupportedMethod(response?.error)) reasons.add("traces-unavailable");
+      else reasons.add("traces-partial");
+    }
+  }
+  return { traces, requested: selected.length, fetched, status: complete ? "complete" : "partial", method: usedFallback ? "debug_traceBlockByNumber" : "trace_block" };
+}
+
+async function enrichReceipts(targets, rpc, concurrency, signal, maxReceipts, reasons) {
+  const selected = targets.slice(0, maxReceipts);
+  if (selected.length < targets.length) reasons.add("receipts-partial");
+  let responses = null;
+  try {
+    responses = await rpc.batch(selected.map((target) => ({ method: "eth_getTransactionReceipt", params: [target.hash] })), signal);
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    if (unsupportedMethod(error) || error?.code === "rate_limited") {
+      responses = selected.map(() => ({ ok: false, error }));
+    }
+  }
+  if (!Array.isArray(responses) || responses.length !== selected.length) {
+    responses = await mapConcurrent(selected, concurrency, async (target) => {
+      try {
+        return { ok: true, result: await rpc.call("eth_getTransactionReceipt", [target.hash], signal) };
+      } catch (error) {
+        if (signal?.aborted) throw error;
+        return { ok: false, error };
+      }
+    });
+  }
+  let fetched = 0;
+  let complete = true;
+  for (let index = 0; index < selected.length; index += 1) {
+    const response = responses[index] ?? { ok: false, error: new Error("missing receipt") };
+    if (!response.ok) {
+      complete = false;
+      if (unsupportedMethod(response.error)) reasons.add("receipts-unavailable");
+      else reasons.add("receipts-partial");
+      continue;
+    }
+    const receipt = response.result;
+    if (!isRecord(receipt)) {
+      complete = false;
+      reasons.add("receipts-partial");
+      continue;
+    }
+    fetched += 1;
+    const status = optionalQuantity(receipt.status);
+    if (status === 0n || status === 1n) {
+      if (status === 1n) selected[index].candidate.successfulTransactionCount += 1;
+      else selected[index].candidate.failedTransactionCount += 1;
+    } else {
+      complete = false;
+      reasons.add("receipt-status-unavailable");
+    }
+    const fee = receiptFee(receipt);
+    if (fee !== null && (selected[index].role === "sender" || selected[index].role === "self") && !selected[index].candidate.feesKnown) {
+      selected[index].candidate.totalFeesWei = fee;
+      selected[index].candidate.feesKnown = true;
+    }
+  }
+  return { requested: selected.length, fetched, status: complete && selected.length === targets.length ? "complete" : "partial" };
+}
+
 function candidate(addressValue, chainId) {
   return {
     address: addressValue,
     chainId,
     classification: "unknown",
     transactionCount: 0,
+    successfulTransactionCount: 0,
+    failedTransactionCount: 0,
     sentTransactionCount: 0,
     receivedTransactionCount: 0,
+    internalTransactionCount: 0,
+    internalValueWei: 0n,
     nativeInWei: 0n,
     nativeOutWei: 0n,
     totalFeesWei: null,
@@ -181,6 +329,24 @@ function record(candidateValue, role, counterparty, value, fee, method, block, t
     const time = BigInt(timestamp);
     candidateValue.firstSeen = candidateValue.firstSeen == null || time < candidateValue.firstSeen ? time : candidateValue.firstSeen;
     candidateValue.lastSeen = candidateValue.lastSeen == null || time > candidateValue.lastSeen ? time : candidateValue.lastSeen;
+  }
+}
+
+function recordInternal(item, counterparty, value, trace, block, transaction, timestamp) {
+  item.internalTransactionCount += 1;
+  item.internalValueWei += value;
+  if (counterparty && counterparty !== item.address) item.counterparties.add(counterparty);
+  if (item.evidence.length < 12) {
+    item.evidence.push({
+      blockNumber: block.number,
+      blockHash: block.hash,
+      transactionHash: trace.transactionHash ?? transaction.hash,
+      transactionIndex: transaction.index,
+      timestamp,
+      role: "internal",
+      method: "internal-call",
+      valueWei: value.toString()
+    });
   }
 }
 
@@ -250,6 +416,10 @@ export async function scanEvm(options = {}) {
   const maxTransactions = bounded(options.maxTransactions, EVM_LIMITS.transactions, 1, EVM_LIMITS.transactions);
   const maxCandidates = bounded(options.maxCandidates, EVM_LIMITS.candidates, 1, EVM_LIMITS.candidates);
   const maxCodeChecks = bounded(options.maxCodeChecks, EVM_LIMITS.codeChecks, 1, EVM_LIMITS.codeChecks);
+  const includeReceipts = options.includeReceipts === true;
+  const maxReceipts = bounded(options.maxReceipts, 200, 1, 1000);
+  const includeTraces = options.includeTraces === true;
+  const maxTraceBlocks = bounded(options.maxTraceBlocks, 20, 1, EVM_LIMITS.blocks);
   const reasons = new Set();
   let head = options.head == null ? null : inputQuantity(options.head, "head");
   if (head == null && (options.fromBlock == null || options.toBlock == null)) head = quantity(await rpc.call("eth_blockNumber", [], options.signal));
@@ -288,7 +458,7 @@ export async function scanEvm(options = {}) {
         if (response?.ok && isRecord(response.result)) {
           const block = response.result;
           blocks.set(group[index], block);
-          blockEvidence.push({ blockNumber: group[index].toString(), blockHash: typeof block.hash === "string" ? block.hash : null });
+          blockEvidence.push({ blockNumber: group[index].toString(), blockHash: typeof block.hash === "string" ? block.hash : null, parentHash: typeof block.parentHash === "string" ? block.parentHash : null });
         } else {
           reasons.add("block-request-failed");
         }
@@ -300,7 +470,7 @@ export async function scanEvm(options = {}) {
           const response = await rpc.call("eth_getBlockByNumber", [hex(block), true], options.signal);
           if (isRecord(response)) {
             blocks.set(block, response);
-            blockEvidence.push({ blockNumber: block.toString(), blockHash: typeof response.hash === "string" ? response.hash : null });
+            blockEvidence.push({ blockNumber: block.toString(), blockHash: typeof response.hash === "string" ? response.hash : null, parentHash: typeof response.parentHash === "string" ? response.parentHash : null });
           } else {
             reasons.add("block-request-failed");
           }
@@ -318,8 +488,19 @@ export async function scanEvm(options = {}) {
     const b = BigInt(right.blockNumber);
     return a < b ? -1 : a > b ? 1 : 0;
   });
+  let previousEvidence = null;
+  for (const evidence of blockEvidence) {
+    if (previousEvidence && BigInt(evidence.blockNumber) === BigInt(previousEvidence.blockNumber) + 1n && evidence.parentHash && previousEvidence.blockHash && evidence.parentHash.toLowerCase() !== previousEvidence.blockHash.toLowerCase()) {
+      reasons.add("reorg-detected");
+      break;
+    }
+    previousEvidence = evidence;
+  }
+  const traceResult = includeTraces ? await fetchTraces(blocks, rpc, concurrency, options.signal, maxTraceBlocks, reasons) : { traces: new Map(), requested: 0, fetched: 0, status: "not-requested", method: null };
   const accumulator = new Map();
+  const receiptTargets = [];
   let transactions = 0;
+  let internalTransactions = 0;
   let transactionCap = false;
   outer: for (const blockNumber of blockNumbers) {
     if (transactions >= maxTransactions) {
@@ -334,6 +515,19 @@ export async function scanEvm(options = {}) {
       continue;
     }
     const timestamp = optionalQuantity(block.timestamp);
+    for (const [traceIndex, trace] of (traceResult.traces.get(blockNumber) ?? []).entries()) {
+      internalTransactions += 1;
+      const traceBlock = { number: blockNumber.toString(), hash: typeof block.hash === "string" ? block.hash : null };
+      const traceTransaction = { hash: trace.transactionHash ?? `${chain.id}:trace:${blockNumber}:${traceIndex}`, index: traceIndex };
+      const sender = addCandidate(accumulator, trace.from, chain.chainId, maxCandidates, reasons);
+      const recipient = addCandidate(accumulator, trace.to, chain.chainId, maxCandidates, reasons);
+      if (sender && recipient && trace.from === trace.to) {
+        recordInternal(sender, trace.to, trace.value, trace, traceBlock, traceTransaction, timestamp);
+      } else {
+        if (sender) recordInternal(sender, trace.to, trace.value, trace, traceBlock, traceTransaction, timestamp);
+        if (recipient) recordInternal(recipient, trace.from, trace.value, trace, traceBlock, traceTransaction, timestamp);
+      }
+    }
     for (let index = 0; index < block.transactions.length; index += 1) {
       if (transactions >= maxTransactions) {
         transactionCap = true;
@@ -355,15 +549,22 @@ export async function scanEvm(options = {}) {
       const blockRecord = { number: blockNumber.toString(), hash: typeof block.hash === "string" ? block.hash : null };
       if (from === to && from) {
         const item = addCandidate(accumulator, from, chain.chainId, maxCandidates, reasons);
-        if (item) record(item, "self", to, value, fee, method, blockRecord, transactionRecord, timestamp);
+        if (item) {
+          record(item, "self", to, value, fee, method, blockRecord, transactionRecord, timestamp);
+          if (includeReceipts && typeof transaction.hash === "string" && /^0x[0-9a-f]{64}$/i.test(transaction.hash)) receiptTargets.push({ hash: transaction.hash, candidate: item, role: "self" });
+        }
       } else {
         const sender = addCandidate(accumulator, from, chain.chainId, maxCandidates, reasons);
-        if (sender) record(sender, "sender", to, value, fee, method, blockRecord, transactionRecord, timestamp);
+        if (sender) {
+          record(sender, "sender", to, value, fee, method, blockRecord, transactionRecord, timestamp);
+          if (includeReceipts && typeof transaction.hash === "string" && /^0x[0-9a-f]{64}$/i.test(transaction.hash)) receiptTargets.push({ hash: transaction.hash, candidate: sender, role: "sender" });
+        }
         const recipient = addCandidate(accumulator, to, chain.chainId, maxCandidates, reasons);
         if (recipient) record(recipient, "recipient", from, value, null, method, blockRecord, transactionRecord, timestamp);
       }
     }
   }
+  const receipts = includeReceipts ? await enrichReceipts(receiptTargets, rpc, concurrency, options.signal, maxReceipts, reasons) : { requested: 0, fetched: 0, status: "not-requested" };
   const prioritized = checkPriority([...accumulator.values()], maxCodeChecks);
   const classification = await classify(prioritized, rpc, concurrency, options.signal);
   for (const item of accumulator.values()) item.classification = classification.get(item.address) ?? "unknown";
@@ -375,8 +576,9 @@ export async function scanEvm(options = {}) {
     transactionCount: item.transactionCount,
     sentTransactionCount: item.sentTransactionCount,
     receivedTransactionCount: item.receivedTransactionCount,
-    successfulTransactionCount: 0,
-    failedTransactionCount: 0,
+    ...(includeTraces ? { internalTransactionCount: item.internalTransactionCount, internalValue: item.internalValueWei } : {}),
+    successfulTransactionCount: item.successfulTransactionCount,
+    failedTransactionCount: item.failedTransactionCount,
     uniqueCounterpartyCount: item.counterparties.size,
     methods: [...item.methods],
     totalValue: item.nativeInWei + item.nativeOutWei,
@@ -401,17 +603,22 @@ export async function scanEvm(options = {}) {
     scannedBlocks: blocks.size.toString(),
     requestedBlocks: blockNumbers.length.toString(),
     transactions: transactions.toString(),
+    ...(includeTraces ? { internalTransactions: internalTransactions.toString(), traceBlocksRequested: traceResult.requested.toString(), traceBlocksFetched: traceResult.fetched.toString(), traceStatus: traceResult.status, traceMethod: traceResult.method } : {}),
     candidates: candidates.length.toString(),
+    reorgDetected: reasons.has("reorg-detected"),
     transactionCap,
     cappedBlocks,
     cappedTransactions: transactionCap,
     codeChecks: prioritized.length.toString(),
+    ...(includeReceipts ? { receiptsRequested: receipts.requested.toString(), receiptsFetched: receipts.fetched.toString(), receiptsStatus: receipts.status } : {}),
     feesAvailable: [...accumulator.values()].some((item) => item.feesKnown),
     feeData: [...accumulator.values()].some((item) => item.feesKnown) ? "available" : "receipts-not-fetched"
   };
   const totalValue = [...accumulator.values()].reduce((total, item) => total + item.nativeInWei + item.nativeOutWei, 0n);
+  const internalValue = [...accumulator.values()].reduce((total, item) => total + item.internalValueWei, 0n);
   const feesAvailable = [...accumulator.values()].some((item) => item.feesKnown);
   const totalFees = feesAvailable ? [...accumulator.values()].reduce((total, item) => total + (item.feesKnown ? item.totalFeesWei : 0n), 0n) : null;
+  const headEvidence = blockEvidence.find((item) => item.blockNumber === toBlock.toString());
   return {
     schemaVersion: SCHEMA_VERSION,
     chain: chain.id,
@@ -421,12 +628,12 @@ export async function scanEvm(options = {}) {
     explorerUrl: chain.explorerUrl,
     capabilities: chain.capabilities,
     zeroEx: chain.zeroEx,
-    range: { unit: "blocks", from: effectiveFrom.toString(), to: toBlock.toString(), requested, capped: cappedBlocks },
+    range: { unit: "blocks", from: effectiveFrom.toString(), to: toBlock.toString(), requested, capped: cappedBlocks, head: { number: toBlock.toString(), hash: headEvidence?.blockHash ?? null, tag: "latest" } },
     coverage,
     candidates,
     blockEvidence,
-    stats: { blocks: blocks.size.toString(), transactions: transactions.toString(), candidates: candidates.length.toString(), fees: totalFees?.toString() ?? null },
-    totals: { value: totalValue.toString(), fees: totalFees?.toString() ?? null }
+    stats: { blocks: blocks.size.toString(), transactions: transactions.toString(), ...(includeTraces ? { internalTransactions: internalTransactions.toString() } : {}), candidates: candidates.length.toString(), fees: totalFees?.toString() ?? null },
+    totals: { value: totalValue.toString(), ...(includeTraces ? { internalValue: internalValue.toString() } : {}), fees: totalFees?.toString() ?? null }
   };
 }
 

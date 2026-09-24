@@ -100,6 +100,9 @@ function makeChain([id, name, chainId, symbol, decimals, rpcUrls, explorerUrl, a
       swap: zeroExName ? "metadata" : "unlisted",
       execution: "disabled",
       discoveryReadOnly: true,
+      tokenBalances: family === "evm" ? "optional" : "optional",
+      nftBalances: family === "evm" ? "optional" : "optional",
+      internalActivity: family === "evm" ? "optional trace_block" : "inner instructions",
       gasMetadata: readOnlyMetadata,
       swapMetadata: zeroExName ? readOnlyMetadata : Object.freeze({ readOnly: true, supported: false })
     },
